@@ -7,11 +7,10 @@
 
 ## GitHub repo
 
-- Create a repo named `parkshare-alexa-mcp-server`.
-- Upload the full contents of `parkshare-alexa-mcp-server/`.
-- Optionally include `parkshare-alexa-copilot-simulator/` as a companion visual demo folder.
+- Repo created: `https://github.com/jonycorcoles2015-blip/parkshare-alexa-mcp`.
+- The repo currently includes the MCP server, companion simulator, worker deployment, docs, scripts, README and licenses.
 - Keep `README.md`.
-- Keep `LICENSE`.
+- Keep the included license files.
 - If public, select Open Source mini challenge.
 - If private, share it with the Devpost/Amazon reviewers listed on the hackathon page when submitting.
 
