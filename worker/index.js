@@ -344,6 +344,27 @@ const page = `<!doctype html>
         background: #18704c;
       }
       .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .fallback-location {
+        display: grid;
+        gap: 8px;
+      }
+      .fallback-location label {
+        color: #5d6963;
+        font-size: 13px;
+        font-weight: 800;
+      }
+      .fallback-location input {
+        min-height: 42px;
+        min-width: 0;
+        border: 1px solid #d6ddd9;
+        border-radius: 8px;
+        padding: 0 12px;
+        color: #17211d;
+      }
+      .fallback-location small {
+        color: #5d6963;
+        line-height: 1.35;
+      }
       button {
         min-height: 44px;
         border: 0;
@@ -444,6 +465,13 @@ const page = `<!doctype html>
           <div class="actions" id="actions"></div>
         </section>
 
+        <section class="fallback-location">
+          <h2>Location fallback</h2>
+          <label for="manualLocation">Optional city or address</label>
+          <input id="manualLocation" type="text" placeholder="Madrid, Zaragoza, London..." autocomplete="street-address">
+          <small>If browser GPS is blocked and IP location is unavailable, ParkShare will use this text instead of a fake demo city.</small>
+        </section>
+
         <section>
           <h2>Conversation</h2>
           <div class="conversation" id="conversation" aria-live="polite"></div>
@@ -494,6 +522,7 @@ const page = `<!doctype html>
       const conversation = document.querySelector("#conversation");
       const assistantAnswer = document.querySelector("#assistantAnswer");
       const contextTitle = document.querySelector("#contextTitle");
+      const manualLocation = document.querySelector("#manualLocation");
       const steps = document.querySelector("#steps");
       const results = document.querySelector("#results");
       const rawResponse = document.querySelector("#rawResponse");
@@ -566,6 +595,50 @@ const page = `<!doctype html>
         });
       }
 
+      async function getApproximateIpLocation() {
+        const providers = [
+          {
+            url: "https://ipapi.co/json/",
+            map: (data) => ({
+              latitude: data.latitude,
+              longitude: data.longitude,
+              label: [data.city, data.region, data.country_name].filter(Boolean).join(", ")
+            })
+          },
+          {
+            url: "https://ipwho.is/",
+            map: (data) => ({
+              latitude: data.latitude,
+              longitude: data.longitude,
+              label: [data.city, data.region, data.country].filter(Boolean).join(", ")
+            })
+          }
+        ];
+
+        for (const provider of providers) {
+          try {
+            const response = await fetch(provider.url);
+            if (!response.ok) continue;
+            const data = await response.json();
+            const mapped = provider.map(data);
+            if (
+              Number.isFinite(Number(mapped.latitude)) &&
+              Number.isFinite(Number(mapped.longitude))
+            ) {
+              return {
+                latitude: Number(mapped.latitude),
+                longitude: Number(mapped.longitude),
+                label: mapped.label || "approximate IP location"
+              };
+            }
+          } catch (error) {
+            // Try the next provider.
+          }
+        }
+
+        throw new Error("Approximate IP location is not available.");
+      }
+
       function ensureMap(latitude, longitude) {
         if (!window.L) return false;
 
@@ -629,19 +702,38 @@ const page = `<!doctype html>
         try {
           const args = { ...scenario.args };
           if (scenario.needsLocation) {
-            try {
-              const location = await getBrowserLocation();
-              args.latitude = location.latitude;
-              args.longitude = location.longitude;
-              args.accuracyMeters = location.accuracyMeters;
-              args.locationSource = "browser_geolocation";
-              args.locationLabel = "your precise browser location";
-              assistantAnswer.textContent = "Searching supermarkets near this location...";
-              addMessage("assistant", "Location allowed. Searching the nearest supermarket now.");
-            } catch (locationError) {
-              args.locationSource = "network_approximate_location";
-              assistantAnswer.textContent = "Precise location was not available. Trying approximate network location...";
-              addMessage("assistant", "Precise location was not available. I will try an approximate network location instead.");
+            const manualText = manualLocation.value.trim();
+            if (manualText) {
+              args.locationText = manualText;
+              args.locationSource = "manual_location_text";
+              args.locationLabel = manualText;
+              assistantAnswer.textContent = "Searching supermarkets from the typed location...";
+              addMessage("assistant", "I will search from the location you typed.");
+            } else {
+              try {
+                const location = await getBrowserLocation();
+                args.latitude = location.latitude;
+                args.longitude = location.longitude;
+                args.accuracyMeters = location.accuracyMeters;
+                args.locationSource = "browser_geolocation";
+                args.locationLabel = "your precise browser location";
+                assistantAnswer.textContent = "Searching supermarkets near this location...";
+                addMessage("assistant", "Location allowed. Searching the nearest supermarket now.");
+              } catch (locationError) {
+                try {
+                  const approximate = await getApproximateIpLocation();
+                  args.latitude = approximate.latitude;
+                  args.longitude = approximate.longitude;
+                  args.locationSource = "ip_approximate_location";
+                  args.locationLabel = approximate.label;
+                  assistantAnswer.textContent = "Precise location was not available. Searching from approximate IP location...";
+                  addMessage("assistant", "Precise location was not available. I will search from an approximate IP location instead.");
+                } catch (ipError) {
+                  args.locationSource = "missing_location";
+                  assistantAnswer.textContent = "Precise and approximate location were not available.";
+                  addMessage("assistant", "I need browser location permission or a typed city/address to search nearby supermarkets.");
+                }
+              }
             }
           }
 
@@ -791,6 +883,21 @@ async function handleDemo(request) {
   }
 
   try {
+    if (
+      tool === "find_nearby_place" &&
+      !hasValidCoordinates(args.latitude, args.longitude) &&
+      typeof args.locationText === "string" &&
+      args.locationText.trim()
+    ) {
+      const geocoded = await geocodeLocationText(args.locationText.trim());
+      if (geocoded) {
+        args.latitude = geocoded.latitude;
+        args.longitude = geocoded.longitude;
+        args.locationSource = "manual_geocoded_location";
+        args.locationLabel = geocoded.label;
+      }
+    }
+
     const requestLocation = getApproximateRequestLocation(request);
     if (
       tool === "find_nearby_place" &&
@@ -888,6 +995,34 @@ function hasValidCoordinates(latitude, longitude) {
   const lat = Number(latitude);
   const lon = Number(longitude);
   return Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+}
+
+async function geocodeLocationText(text) {
+  const url =
+    `https://nominatim.openstreetmap.org/search?` +
+    `format=jsonv2&limit=1&q=${encodeURIComponent(text)}`;
+  const response = await fetch(url, {
+    headers: {
+      "accept": "application/json",
+      "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
+    }
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = await response.json();
+  const best = data && data[0];
+  if (!best || !hasValidCoordinates(best.lat, best.lon)) {
+    return null;
+  }
+
+  return {
+    latitude: Number(best.lat),
+    longitude: Number(best.lon),
+    label: best.display_name || text
+  };
 }
 
 function getApproximateRequestLocation(request) {
@@ -1036,8 +1171,10 @@ async function fetchDrivingRoute(origin, destination) {
 async function findNearbyPlace(args) {
   const query = String(args.query || "").toLowerCase();
   const maxResults = Math.min(Math.max(Number(args.maxResults || 3), 1), 5);
+  const isSupermarketSearch = query.includes("supermarket");
+  const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
 
-  if (query.includes("supermarket") && hasValidCoordinates(args.latitude, args.longitude)) {
+  if (isSupermarketSearch && hasCoordinates) {
     const origin = {
       latitude: Number(args.latitude),
       longitude: Number(args.longitude)
@@ -1074,6 +1211,37 @@ async function findNearbyPlace(args) {
         }
       };
     }
+  }
+
+  if (isSupermarketSearch) {
+    if (!hasCoordinates) {
+      return {
+        spoken:
+          "I do not have a usable location yet. Please allow browser location, let ParkShare use approximate IP location, or type a city or address in the fallback field.",
+        data: {
+          query: args.query,
+          locationSource: args.locationSource || "missing_location",
+          needsLocation: true,
+          results: []
+        }
+      };
+    }
+
+    return {
+      spoken:
+        "I could not confirm live supermarkets near that location right now. I will not use the Montblanc fallback because this scenario must be based on the judge's real location.",
+      data: {
+        query: args.query,
+        locationSource: args.locationSource || "provided_coordinates",
+        locationLabel: args.locationLabel || "provided location",
+        originCoordinates: {
+          latitude: Number(args.latitude),
+          longitude: Number(args.longitude)
+        },
+        liveLookupFailed: true,
+        results: []
+      }
+    };
   }
 
   const matches = demoPlaces
