@@ -90,7 +90,7 @@ const geocodingTimeoutMs = 4500;
 const nominatimSearchTimeoutMs = 3500;
 const overpassTimeoutMs = 12000;
 const overpassOverallTimeoutMs = 12000;
-const routeTimeoutMs = 4500;
+const routeTimeoutMs = 8000;
 const overpassEndpoints = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter"
@@ -690,6 +690,75 @@ const page = `<!doctype html>
         return true;
       }
 
+      function formatMinutes(minutes) {
+        return Number(minutes) === 1 ? "1 minute" : minutes + " minutes";
+      }
+
+      async function fetchBrowserRoute(origin, destination) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 9000);
+        const url =
+          "https://router.project-osrm.org/route/v1/driving/" +
+          origin.longitude + "," + origin.latitude + ";" +
+          destination.longitude + "," + destination.latitude +
+          "?overview=full&geometries=geojson";
+
+        try {
+          const response = await fetch(url, {
+            headers: { "accept": "application/json" },
+            signal: controller.signal
+          });
+          if (!response.ok) return null;
+          const data = await response.json();
+          const route = data.routes && data.routes[0];
+          if (!route) return null;
+
+          return {
+            source: "osrm_browser",
+            distanceKm: Number((route.distance / 1000).toFixed(1)),
+            durationMinutes: Math.max(1, Math.round(route.duration / 60)),
+            coordinates: route.geometry && Array.isArray(route.geometry.coordinates)
+              ? route.geometry.coordinates
+              : []
+          };
+        } catch (error) {
+          return null;
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+
+      async function addBrowserRouteIfNeeded(data) {
+        const structured = data.structuredContent || data;
+        const origin = structured && structured.originCoordinates;
+        const destination = structured && structured.results && structured.results[0];
+
+        if (
+          structured.route ||
+          !origin ||
+          !destination ||
+          !destination.latitude ||
+          !destination.longitude
+        ) {
+          return;
+        }
+
+        const route = await fetchBrowserRoute(origin, destination);
+        if (!route) return;
+
+        structured.route = route;
+        destination.distanceKm = route.distanceKm;
+        destination.driveMinutes = route.durationMinutes;
+
+        if (data.content && data.content[0]) {
+          const label = structured.locationLabel || "your location";
+          data.content[0].text =
+            "Using " + label + ", I found " + destination.name + ", about " +
+            route.distanceKm + " kilometers away. The drive is around " +
+            formatMinutes(route.durationMinutes) + ".";
+        }
+      }
+
       function renderMap(data) {
         const origin = data && data.originCoordinates;
         const destination = data && data.results && data.results[0];
@@ -705,12 +774,17 @@ const page = `<!doctype html>
           .addTo(map)
           .bindPopup(destination.name || "Supermarket");
 
-        const routeCoordinates = data.route && Array.isArray(data.route.coordinates)
-          ? data.route.coordinates.map(([longitude, latitude]) => [latitude, longitude])
-          : [
-              [origin.latitude, origin.longitude],
-              [destination.latitude, destination.longitude]
-            ];
+        if (!data.route || !Array.isArray(data.route.coordinates) || !data.route.coordinates.length) {
+          const bounds = L.latLngBounds([
+            [origin.latitude, origin.longitude],
+            [destination.latitude, destination.longitude]
+          ]);
+          map.fitBounds(bounds.pad(0.24));
+          return;
+        }
+
+        const routeCoordinates = data.route.coordinates
+          .map(([longitude, latitude]) => [latitude, longitude]);
 
         routeLayer = L.polyline(routeCoordinates, {
           color: "#215f88",
@@ -770,6 +844,7 @@ const page = `<!doctype html>
           }
 
           const data = await fetchDemoResult(scenario.tool, args);
+          await addBrowserRouteIfNeeded(data);
           const answer = data.content && data.content[0]
             ? data.content[0].text
             : "The MCP server answered, but no speech text was returned.";
@@ -1022,6 +1097,10 @@ function hasValidCoordinates(latitude, longitude) {
   const lat = Number(latitude);
   const lon = Number(longitude);
   return Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+}
+
+function formatMinutes(minutes) {
+  return Number(minutes) === 1 ? "1 minute" : `${minutes} minutes`;
 }
 
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
@@ -1330,7 +1409,7 @@ async function findNearbyPlace(args) {
         spoken:
           `Using ${source === "network_approximate_location" ? "your approximate network location" : label}, ` +
           `I found ${best.name}, about ${best.distanceKm} kilometers away. ` +
-          `The drive is around ${best.driveMinutes} minutes.`,
+          `The drive is around ${formatMinutes(best.driveMinutes)}.`,
         data: {
           query: args.query,
           locationSource: source,
@@ -1385,7 +1464,7 @@ async function findNearbyPlace(args) {
   return {
     spoken:
       `I could not confirm live nearby places, so I used the Montblanc fallback demo. I found ${best.name}, about ${best.distanceKm} kilometers away. ` +
-      `The drive is around ${best.driveMinutes} minutes and I found ${best.parkingLeads} parking leads nearby.`,
+      `The drive is around ${formatMinutes(best.driveMinutes)} and I found ${best.parkingLeads} parking leads nearby.`,
     data: {
       query: args.query,
       locationSource: "demo_montblanc_fallback",
