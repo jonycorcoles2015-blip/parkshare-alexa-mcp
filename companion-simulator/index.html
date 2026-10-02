@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ParkShare Alexa+ Driving Copilot Simulator</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="panel conversation-panel" aria-label="Assistant conversation">
+        <div class="brand-row">
+          <div class="brand-mark">P</div>
+          <div>
+            <h1>ParkShare Alexa+ Copilot</h1>
+            <p>Simulated Alexa+ experience for parking, places and road alerts.</p>
+          </div>
+        </div>
+
+        <div class="status-strip">
+          <span class="status-dot"></span>
+          <span>Simulation mode</span>
+        </div>
+
+        <section class="script-controls" aria-label="Demo scenarios">
+          <button type="button" data-scenario="supermarket">Find supermarket</button>
+          <button type="button" data-scenario="parking">Find parking</button>
+          <button type="button" data-scenario="alerts">Road alerts</button>
+          <button type="button" data-scenario="release">Release spot</button>
+        </section>
+
+        <section class="custom-command" aria-label="Custom command">
+          <label for="commandInput">Driver request</label>
+          <div class="input-row">
+            <input id="commandInput" type="text" value="Alexa, ask ParkShare to find the nearest supermarket." />
+            <button id="sendCommand" type="button">Send</button>
+          </div>
+        </section>
+
+        <section id="conversation" class="conversation" aria-live="polite"></section>
+      </aside>
+
+      <section class="map-panel" aria-label="Route and map preview">
+        <div class="map-header">
+          <div>
+            <h2 id="mapTitle">Current mobility context</h2>
+            <p id="mapSubtitle">Montblanc camping area, Tarragona</p>
+          </div>
+          <div class="eta-box">
+            <span id="etaValue">7 min</span>
+            <small>to best match</small>
+          </div>
+        </div>
+
+        <div class="map-canvas" aria-hidden="true">
+          <div class="road road-main"></div>
+          <div class="road road-branch"></div>
+          <div class="pin pin-driver">
+            <span>You</span>
+          </div>
+          <div class="pin pin-place">
+            <span id="placePin">Mercadona</span>
+          </div>
+          <div class="pin pin-parking">
+            <span>Parking</span>
+          </div>
+          <div class="alert-marker">A</div>
+          <div class="route-line"></div>
+        </div>
+
+        <div class="metrics-grid">
+          <div>
+            <span id="distanceMetric">5.2 km</span>
+            <small>nearest useful place</small>
+          </div>
+          <div>
+            <span id="parkingMetric">3</span>
+            <small>parking leads</small>
+          </div>
+          <div>
+            <span id="alertMetric">1</span>
+            <small>route alert</small>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel results-panel" aria-label="Assistant actions">
+        <section>
+          <h2>Assistant answer</h2>
+          <p id="assistantAnswer">
+            I found a supermarket near your current location and checked parking options around it.
+          </p>
+        </section>
+
+        <section>
+          <h2>Action log</h2>
+          <ol id="actionLog" class="action-log"></ol>
+        </section>
+
+        <section>
+          <h2>Parking result</h2>
+          <div class="result-list" id="resultList"></div>
+        </section>
+
+        <section>
+          <h2>Voice output</h2>
+          <button id="speakAnswer" type="button" class="secondary-button">Play assistant voice</button>
+          <p class="hint">Uses browser speech synthesis when available.</p>
+        </section>
+      </aside>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
+

@@ -1,0 +1,15 @@
+{
+  "name": "parkshare-alexa-mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Real MCP Streamable HTTP server for the ParkShare Alexa+ mobility copilot.",
+  "scripts": {
+    "start": "node src/server.js",
+    "smoke": "node scripts/smoke-test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
