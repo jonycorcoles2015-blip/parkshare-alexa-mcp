@@ -21,6 +21,7 @@
 - Track: Alexa+.
 - Demo video: public YouTube or Vimeo link, under 3 minutes.
 - Repository: GitHub link for the MCP server.
+- HTTPS MCP endpoint: `https://parkshare-alexa-mcp.jonycorcoles2015.chatgpt.site/mcp`.
 - Description: copy from `parkshare_devpost_final_fields.md`.
 - Product feedback: copy from `parkshare_devpost_final_fields.md`.
 - Friction logs: copy from `parkshare_devpost_final_fields.md`.
@@ -39,6 +40,7 @@
 - The project page must say "Alexa+ MCP server" as the main implementation.
 - If showing the web UI, call it a companion simulator, not the main implementation.
 - Do not claim production Alexa+ publication unless Amazon tooling is fully connected.
+- The Site is private right now; make it public or invite judge/reviewer emails before final external submission.
 - Do not claim AWS Builder unless real AWS code was added.
 - Do not claim Nebius/NVIDIA unless that version is actually built.
 - Make sure every promised feature is visible in either the simulator, screenshots, or video.

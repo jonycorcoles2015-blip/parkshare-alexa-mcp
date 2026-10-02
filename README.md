@@ -13,6 +13,18 @@ This submission contains:
 
 The primary implementation is the MCP endpoint, not the visual simulator.
 
+Published private Site:
+
+```text
+https://parkshare-alexa-mcp.jonycorcoles2015.chatgpt.site
+```
+
+MCP endpoint:
+
+```text
+https://parkshare-alexa-mcp.jonycorcoles2015.chatgpt.site/mcp
+```
+
 Architecture:
 
 ```text
@@ -101,4 +113,8 @@ Use these files:
 - `docs/parkshare_devpost_final_fields.md`
 - `docs/parkshare_demo_video_script_english.md`
 - `docs/parkshare_submission_upload_checklist.md`
+
+## Access note
+
+The Site is currently private to the owner account. Before submitting to external judges, either make it public or invite the reviewer emails required by the hackathon.
 
