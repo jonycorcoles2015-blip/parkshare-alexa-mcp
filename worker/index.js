@@ -357,6 +357,11 @@ const page = `<!doctype html>
         display: grid;
         gap: 8px;
       }
+      .coordinate-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
       .fallback-location label {
         color: #5d6963;
         font-size: 13px;
@@ -450,7 +455,7 @@ const page = `<!doctype html>
         main { grid-template-columns: 1fr; padding: 8px; gap: 8px; }
       }
       @media (max-width: 560px) {
-        .actions, .meta-grid { grid-template-columns: 1fr; }
+        .actions, .meta-grid, .coordinate-grid { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -475,10 +480,15 @@ const page = `<!doctype html>
         </section>
 
         <section class="fallback-location">
-          <h2>Location fallback</h2>
-          <label for="manualLocation">Optional city or address</label>
+          <h2>Start location</h2>
+          <label for="manualLatitude">Exact coordinates</label>
+          <div class="coordinate-grid">
+            <input id="manualLatitude" type="text" inputmode="decimal" placeholder="Latitude">
+            <input id="manualLongitude" type="text" inputmode="decimal" placeholder="Longitude">
+          </div>
+          <label for="manualLocation">Approximate city or address</label>
           <input id="manualLocation" type="text" placeholder="Madrid, Zaragoza, London..." autocomplete="street-address">
-          <small>If browser GPS is blocked and IP location is unavailable, ParkShare will use this text instead of a fake demo city.</small>
+          <small>Leave these empty to request browser GPS. A city or address is only an approximate fallback, never your exact location.</small>
         </section>
 
         <section>
@@ -532,6 +542,8 @@ const page = `<!doctype html>
       const assistantAnswer = document.querySelector("#assistantAnswer");
       const contextTitle = document.querySelector("#contextTitle");
       const manualLocation = document.querySelector("#manualLocation");
+      const manualLatitude = document.querySelector("#manualLatitude");
+      const manualLongitude = document.querySelector("#manualLongitude");
       const steps = document.querySelector("#steps");
       const results = document.querySelector("#results");
       const rawResponse = document.querySelector("#rawResponse");
@@ -604,50 +616,6 @@ const page = `<!doctype html>
         });
       }
 
-      async function getApproximateIpLocation() {
-        const providers = [
-          {
-            url: "https://ipapi.co/json/",
-            map: (data) => ({
-              latitude: data.latitude,
-              longitude: data.longitude,
-              label: [data.city, data.region, data.country_name].filter(Boolean).join(", ")
-            })
-          },
-          {
-            url: "https://ipwho.is/",
-            map: (data) => ({
-              latitude: data.latitude,
-              longitude: data.longitude,
-              label: [data.city, data.region, data.country].filter(Boolean).join(", ")
-            })
-          }
-        ];
-
-        for (const provider of providers) {
-          try {
-            const response = await fetch(provider.url);
-            if (!response.ok) continue;
-            const data = await response.json();
-            const mapped = provider.map(data);
-            if (
-              Number.isFinite(Number(mapped.latitude)) &&
-              Number.isFinite(Number(mapped.longitude))
-            ) {
-              return {
-                latitude: Number(mapped.latitude),
-                longitude: Number(mapped.longitude),
-                label: mapped.label || "approximate IP location"
-              };
-            }
-          } catch (error) {
-            // Try the next provider.
-          }
-        }
-
-        throw new Error("Approximate IP location is not available.");
-      }
-
       async function fetchDemoResult(tool, args) {
         const controller = new AbortController();
         const timeout = window.setTimeout(() => controller.abort(), 32000);
@@ -692,6 +660,44 @@ const page = `<!doctype html>
 
       function formatMinutes(minutes) {
         return Number(minutes) === 1 ? "1 minute" : minutes + " minutes";
+      }
+
+      function parseTypedCoordinates() {
+        const latitudeText = manualLatitude.value.trim().replace(",", ".");
+        const longitudeText = manualLongitude.value.trim().replace(",", ".");
+        const hasLatitude = latitudeText.length > 0;
+        const hasLongitude = longitudeText.length > 0;
+
+        if (!hasLatitude && !hasLongitude) return null;
+
+        const latitude = Number(latitudeText);
+        const longitude = Number(longitudeText);
+        if (
+          !hasLatitude ||
+          !hasLongitude ||
+          !Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          latitude < -90 ||
+          latitude > 90 ||
+          longitude < -180 ||
+          longitude > 180
+        ) {
+          throw new Error("Enter both latitude and longitude with valid numeric values.");
+        }
+
+        return { latitude, longitude };
+      }
+
+      function describeLocationForSpeech(source, label) {
+        if (source === "browser_geolocation") return "your precise browser location";
+        if (source === "typed_coordinates") return "the exact coordinates you entered";
+        if (source === "manual_geocoded_location" || source === "manual_location_text") {
+          return "the approximate typed place " + label;
+        }
+        if (source === "network_approximate_location" || source === "ip_approximate_location") {
+          return "your approximate network location";
+        }
+        return label || "the selected location";
       }
 
       async function fetchBrowserRoute(origin, destination) {
@@ -751,7 +757,10 @@ const page = `<!doctype html>
         destination.driveMinutes = route.durationMinutes;
 
         if (data.content && data.content[0]) {
-          const label = structured.locationLabel || "your location";
+          const label = describeLocationForSpeech(
+            structured.locationSource,
+            structured.locationLabel || "your location"
+          );
           data.content[0].text =
             "Using " + label + ", I found " + destination.name + ", about " +
             route.distanceKm + " kilometers away. The drive is around " +
@@ -798,7 +807,6 @@ const page = `<!doctype html>
       async function callScenario(key) {
         const scenario = scenarios[key];
         document.querySelectorAll("button").forEach((button) => { button.disabled = true; });
-        addMessage("driver", scenario.driver);
         assistantAnswer.textContent = scenario.needsLocation
           ? "Requesting browser location..."
           : "Calling ParkShare MCP demo...";
@@ -807,14 +815,28 @@ const page = `<!doctype html>
 
         try {
           const args = { ...scenario.args };
+          let driverText = scenario.driver;
           if (scenario.needsLocation) {
             const manualText = manualLocation.value.trim();
-            if (manualText) {
+            const typedCoordinates = parseTypedCoordinates();
+            if (typedCoordinates) {
+              args.latitude = typedCoordinates.latitude;
+              args.longitude = typedCoordinates.longitude;
+              args.locationSource = "typed_coordinates";
+              args.locationLabel =
+                typedCoordinates.latitude.toFixed(6) + ", " + typedCoordinates.longitude.toFixed(6);
+              driverText = "Alexa, ask ParkShare to find the nearest supermarket from these exact coordinates.";
+              assistantAnswer.textContent = "Searching supermarkets from the coordinates you entered...";
+              addMessage("driver", driverText);
+              addMessage("assistant", "I will search from the exact coordinates you entered.");
+            } else if (manualText) {
               args.locationText = manualText;
               args.locationSource = "manual_location_text";
               args.locationLabel = manualText;
-              assistantAnswer.textContent = "Searching supermarkets from the typed location...";
-              addMessage("assistant", "I will search from the location you typed.");
+              driverText = "Alexa, ask ParkShare to find the nearest supermarket from this typed city or address.";
+              assistantAnswer.textContent = "Searching supermarkets from the approximate typed place...";
+              addMessage("driver", driverText);
+              addMessage("assistant", "I will search from the typed city or address as an approximate starting point.");
             } else {
               try {
                 const location = await getBrowserLocation();
@@ -824,23 +846,18 @@ const page = `<!doctype html>
                 args.locationSource = "browser_geolocation";
                 args.locationLabel = "your precise browser location";
                 assistantAnswer.textContent = "Searching supermarkets near this location...";
+                addMessage("driver", driverText);
                 addMessage("assistant", "Location allowed. Searching the nearest supermarket now.");
               } catch (locationError) {
-                try {
-                  const approximate = await getApproximateIpLocation();
-                  args.latitude = approximate.latitude;
-                  args.longitude = approximate.longitude;
-                  args.locationSource = "ip_approximate_location";
-                  args.locationLabel = approximate.label;
-                  assistantAnswer.textContent = "Precise location was not available. Searching from approximate IP location...";
-                  addMessage("assistant", "Precise location was not available. I will search from an approximate IP location instead.");
-                } catch (ipError) {
-                  args.locationSource = "missing_location";
-                  assistantAnswer.textContent = "Precise and approximate location were not available.";
-                  addMessage("assistant", "I need browser location permission or a typed city/address to search nearby supermarkets.");
-                }
+                args.locationSource = "missing_location";
+                driverText = "Alexa, ask ParkShare to find the nearest supermarket from my location.";
+                assistantAnswer.textContent = "Browser GPS was not available.";
+                addMessage("driver", driverText);
+                addMessage("assistant", "I need browser location permission, exact coordinates, or a typed city/address to search nearby supermarkets.");
               }
             }
+          } else {
+            addMessage("driver", driverText);
           }
 
           const data = await fetchDemoResult(scenario.tool, args);
@@ -1000,7 +1017,10 @@ async function handleDemo(request) {
       }
     }
 
-    const requestLocation = getApproximateRequestLocation(request);
+    const requestLocation =
+      args.allowApproximateNetworkLocation === true
+        ? getApproximateRequestLocation(request)
+        : null;
     if (
       tool === "find_nearby_place" &&
       !hasValidCoordinates(args.latitude, args.longitude) &&
@@ -1101,6 +1121,26 @@ function hasValidCoordinates(latitude, longitude) {
 
 function formatMinutes(minutes) {
   return Number(minutes) === 1 ? "1 minute" : `${minutes} minutes`;
+}
+
+function describeStartLocation(source, label) {
+  if (source === "browser_geolocation") {
+    return "your precise browser location";
+  }
+
+  if (source === "typed_coordinates") {
+    return "the exact coordinates you entered";
+  }
+
+  if (source === "manual_geocoded_location" || source === "manual_location_text") {
+    return `the approximate typed place ${label}`;
+  }
+
+  if (source === "network_approximate_location" || source === "ip_approximate_location") {
+    return "your approximate network location";
+  }
+
+  return label || "the selected location";
 }
 
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
@@ -1407,7 +1447,7 @@ async function findNearbyPlace(args) {
 
       return {
         spoken:
-          `Using ${source === "network_approximate_location" ? "your approximate network location" : label}, ` +
+          `Using ${describeStartLocation(source, label)}, ` +
           `I found ${best.name}, about ${best.distanceKm} kilometers away. ` +
           `The drive is around ${formatMinutes(best.driveMinutes)}.`,
         data: {
@@ -1428,7 +1468,7 @@ async function findNearbyPlace(args) {
     if (!hasCoordinates) {
       return {
         spoken:
-          "I do not have a usable location yet. Please allow browser location, let ParkShare use approximate IP location, or type a city or address in the fallback field.",
+          "I do not have a usable start location yet. Please allow browser location, enter exact coordinates, or type a city or address as an approximate fallback.",
         data: {
           query: args.query,
           locationSource: args.locationSource || "missing_location",
