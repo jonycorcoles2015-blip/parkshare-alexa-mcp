@@ -86,6 +86,15 @@ const fallbackLocation = {
 };
 
 const supermarketSearchRadiiMeters = [5000, 15000, 50000, 100000];
+const geocodingTimeoutMs = 4500;
+const nominatimSearchTimeoutMs = 3500;
+const overpassTimeoutMs = 12000;
+const overpassOverallTimeoutMs = 12000;
+const routeTimeoutMs = 4500;
+const overpassEndpoints = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter"
+];
 
 const toolDefinitions = [
   {
@@ -224,9 +233,9 @@ const pageScenarios = {
     tool: "find_nearby_place",
     args: { query: "supermarket", maxResults: 3 },
     needsLocation: true,
-    context: "Live supermarket search from browser location",
+    context: "Live supermarket search from the active location",
     steps: [
-      "Ask the browser for driver location",
+      "Use browser, approximate or typed driver location",
       "Search OpenStreetMap supermarkets around that point",
       "Rank results by practical driving distance",
       "Draw a route to the closest supermarket when routing is available"
@@ -639,6 +648,29 @@ const page = `<!doctype html>
         throw new Error("Approximate IP location is not available.");
       }
 
+      async function fetchDemoResult(tool, args) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 32000);
+
+        try {
+          const response = await fetch("/demo", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ tool, arguments: args }),
+            signal: controller.signal
+          });
+
+          if (!response.ok) {
+            const message = await response.text().catch(() => "");
+            throw new Error(message || "ParkShare demo request failed.");
+          }
+
+          return response.json();
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+
       function ensureMap(latitude, longitude) {
         if (!window.L) return false;
 
@@ -737,15 +769,7 @@ const page = `<!doctype html>
             }
           }
 
-          const response = await fetch("/demo", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              tool: scenario.tool,
-              arguments: args
-            })
-          });
-          const data = await response.json();
+          const data = await fetchDemoResult(scenario.tool, args);
           const answer = data.content && data.content[0]
             ? data.content[0].text
             : "The MCP server answered, but no speech text was returned.";
@@ -756,7 +780,10 @@ const page = `<!doctype html>
           renderMap(data.structuredContent || data);
           rawResponse.textContent = JSON.stringify(data, null, 2);
         } catch (error) {
-          assistantAnswer.textContent = "The browser could not complete this ParkShare demo request.";
+          assistantAnswer.textContent =
+            error && error.name === "AbortError"
+              ? "The live lookup took too long. Please try again or type a more specific city or address."
+              : "The browser could not complete this ParkShare demo request.";
           addMessage("assistant", assistantAnswer.textContent);
           rawResponse.textContent = String(error && error.message ? error.message : error);
         } finally {
@@ -997,22 +1024,43 @@ function hasValidCoordinates(latitude, longitude) {
   return Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 }
 
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return response.json();
+  } catch (error) {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function geocodeLocationText(text) {
   const url =
     `https://nominatim.openstreetmap.org/search?` +
     `format=jsonv2&limit=1&q=${encodeURIComponent(text)}`;
-  const response = await fetch(url, {
+  const data = await fetchJsonWithTimeout(url, {
     headers: {
       "accept": "application/json",
       "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
     }
-  });
+  }, geocodingTimeoutMs);
 
-  if (!response.ok) {
+  if (!data) {
     return null;
   }
 
-  const data = await response.json();
   const best = data && data[0];
   if (!best || !hasValidCoordinates(best.lat, best.lon)) {
     return null;
@@ -1092,7 +1140,83 @@ function placeFromOsmElement(element, origin) {
   };
 }
 
+function viewboxForRadius(origin, radiusMeters) {
+  const latitudeDelta = radiusMeters / 111320;
+  const longitudeDelta =
+    radiusMeters / (111320 * Math.max(Math.cos((origin.latitude * Math.PI) / 180), 0.1));
+
+  return [
+    origin.longitude - longitudeDelta,
+    origin.latitude + latitudeDelta,
+    origin.longitude + longitudeDelta,
+    origin.latitude - latitudeDelta
+  ]
+    .map((value) => Number(value.toFixed(6)))
+    .join(",");
+}
+
+function placeFromNominatimResult(result, origin) {
+  if (!hasValidCoordinates(result.lat, result.lon)) {
+    return null;
+  }
+
+  const latitude = Number(result.lat);
+  const longitude = Number(result.lon);
+  const displayName = result.display_name || "OpenStreetMap supermarket";
+  const name = result.name || displayName.split(",")[0] || "Supermarket";
+  const distanceKm = haversineKm(origin, { latitude, longitude });
+
+  return {
+    id: `nominatim-${result.osm_type || "place"}-${result.osm_id || result.place_id}`,
+    name,
+    type: "supermarket",
+    distanceKm: Number(distanceKm.toFixed(2)),
+    driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
+    address: displayName,
+    parkingLeads: 0,
+    latitude,
+    longitude,
+    source: "openstreetmap_nominatim"
+  };
+}
+
+async function fetchNominatimSupermarkets(origin, maxResults) {
+  for (const radius of supermarketSearchRadiiMeters) {
+    const params = new URLSearchParams({
+      format: "jsonv2",
+      limit: String(Math.min(Math.max(maxResults * 4, 8), 12)),
+      q: "supermarket",
+      bounded: "1",
+      viewbox: viewboxForRadius(origin, radius)
+    });
+    const data = await fetchJsonWithTimeout(
+      `https://nominatim.openstreetmap.org/search?${params.toString()}`,
+      {
+        headers: {
+          "accept": "application/json",
+          "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
+        }
+      },
+      nominatimSearchTimeoutMs
+    );
+    const results = (data || [])
+      .map((result) => placeFromNominatimResult(result, origin))
+      .filter(Boolean)
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, maxResults);
+
+    if (results.length) {
+      return { radiusMeters: radius, results };
+    }
+  }
+
+  return null;
+}
+
 async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
+  const startedAt = Date.now();
+  const rawResultLimit = Math.min(Math.max(maxResults * 4, 8), 12);
+
   for (const radius of supermarketSearchRadiiMeters) {
     const query = `
       [out:json][timeout:12];
@@ -1101,28 +1225,33 @@ async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
         way["shop"="supermarket"](around:${radius},${origin.latitude},${origin.longitude});
         relation["shop"="supermarket"](around:${radius},${origin.latitude},${origin.longitude});
       );
-      out center tags ${Math.max(maxResults * 6, 12)};
+      out center tags ${rawResultLimit};
     `;
-    const response = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, {
-      headers: {
-        "accept": "application/json",
-        "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
+    for (const endpoint of overpassEndpoints) {
+      const remainingMs = overpassOverallTimeoutMs - (Date.now() - startedAt);
+      if (remainingMs < 1000) {
+        return null;
       }
-    });
+      const data = await fetchJsonWithTimeout(
+        `${endpoint}?data=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            "accept": "application/json",
+            "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
+          }
+        },
+        Math.min(overpassTimeoutMs, remainingMs)
+      );
 
-    if (!response.ok) {
-      continue;
-    }
+      const results = (data?.elements || [])
+        .map((element) => placeFromOsmElement(element, origin))
+        .filter(Boolean)
+        .sort((a, b) => a.distanceKm - b.distanceKm)
+        .slice(0, maxResults);
 
-    const data = await response.json();
-    const results = (data.elements || [])
-      .map((element) => placeFromOsmElement(element, origin))
-      .filter(Boolean)
-      .sort((a, b) => a.distanceKm - b.distanceKm)
-      .slice(0, maxResults);
-
-    if (results.length) {
-      return { radiusMeters: radius, results };
+      if (results.length) {
+        return { radiusMeters: radius, results };
+      }
     }
   }
 
@@ -1148,13 +1277,14 @@ async function fetchDrivingRoute(origin, destination) {
     `https://router.project-osrm.org/route/v1/driving/` +
     `${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}` +
     `?overview=full&geometries=geojson`;
-  const response = await fetch(url, { headers: { "accept": "application/json" } });
+  const data = await fetchJsonWithTimeout(url, {
+    headers: { "accept": "application/json" }
+  }, routeTimeoutMs);
 
-  if (!response.ok) {
+  if (!data) {
     return null;
   }
 
-  const data = await response.json();
   const route = data.routes && data.routes[0];
   if (!route) {
     return null;
@@ -1179,7 +1309,9 @@ async function findNearbyPlace(args) {
       latitude: Number(args.latitude),
       longitude: Number(args.longitude)
     };
-    const live = await fetchOpenStreetMapSupermarkets(origin, maxResults);
+    const live =
+      (await fetchNominatimSupermarkets(origin, maxResults)) ||
+      (await fetchOpenStreetMapSupermarkets(origin, maxResults));
 
     if (live?.results?.length) {
       const best = live.results[0];
