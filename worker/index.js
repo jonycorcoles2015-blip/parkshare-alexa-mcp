@@ -208,6 +208,61 @@ const toolDefinitions = [
   }
 ];
 
+const pageScenarios = {
+  supermarket: {
+    label: "Find supermarket",
+    driver: "Alexa, ask ParkShare to find the nearest supermarket.",
+    tool: "find_nearby_place",
+    args: { query: "supermarket", maxResults: 3 },
+    context: "Current-location search from Montblanc camping area",
+    steps: [
+      "Read current driver location",
+      "Search nearby places without city limits",
+      "Rank results by practical driving distance",
+      "Check parking leads around the best result"
+    ]
+  },
+  parking: {
+    label: "Find parking",
+    driver: "Alexa, ask ParkShare to guide me to parking near Mercadona Montblanc.",
+    tool: "find_parking_near_destination",
+    args: { destination: "Mercadona Montblanc", requirePreviousSpotConfirmation: true },
+    context: "Destination parking guidance",
+    steps: [
+      "Load destination context",
+      "Check active parking stock",
+      "Select closest practical parking lead",
+      "Ask whether the previous spot was left free"
+    ]
+  },
+  alerts: {
+    label: "Road alerts",
+    driver: "Alexa, ask ParkShare if there are road alerts on my route.",
+    tool: "get_road_alerts",
+    args: { origin: "current_location", destination: "Montblanc", includeAlternativeRoute: true },
+    context: "Community route alerts",
+    steps: [
+      "Read current route",
+      "Check active controls, cameras and traffic reports",
+      "Compare primary and alternate route",
+      "Prepare short driving-safe recommendation"
+    ]
+  },
+  release: {
+    label: "Release spot",
+    driver: "Alexa, tell ParkShare I left my parking spot free.",
+    tool: "release_parking_spot",
+    args: { confirmation: "driver_confirmed_free" },
+    context: "Collaborative parking update",
+    steps: [
+      "Confirm driver intent",
+      "Release previous parking coordinates",
+      "Publish temporary free-spot signal",
+      "Start expiry and confidence rules"
+    ]
+  }
+};
+
 const page = `<!doctype html>
 <html lang="en">
   <head>
@@ -221,39 +276,326 @@ const page = `<!doctype html>
         color: #17211d;
         background: #eef2f0;
       }
-      body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; }
+      button, input { font: inherit; }
       main {
-        width: min(920px, calc(100vw - 32px));
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: minmax(300px, 390px) minmax(360px, 1fr);
+        gap: 16px;
+        padding: 16px;
+      }
+      section, aside {
         background: white;
         border: 1px solid #d6ddd9;
         border-radius: 8px;
-        padding: 28px;
+        padding: 18px;
         box-shadow: 0 18px 45px rgba(22, 33, 29, 0.14);
       }
-      h1 { margin: 0 0 8px; font-size: clamp(28px, 5vw, 48px); line-height: 1; }
-      p { color: #5d6963; line-height: 1.55; }
+      h1 { margin: 0 0 8px; font-size: clamp(26px, 4vw, 42px); line-height: 1; }
+      h2 { margin: 0 0 10px; font-size: 16px; }
+      p { color: #5d6963; line-height: 1.55; margin: 0; }
       code { background: #eef2f0; border-radius: 6px; padding: 3px 6px; }
-      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
-      .card { border: 1px solid #d6ddd9; border-radius: 8px; padding: 14px; }
-      .card strong { display: block; margin-bottom: 6px; }
-      @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } }
+      .left, .right { display: grid; gap: 16px; align-content: start; }
+      .brand-mark {
+        width: 46px;
+        height: 46px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        background: #18704c;
+        color: white;
+        font-weight: 850;
+        margin-bottom: 14px;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        width: fit-content;
+        margin-top: 14px;
+        padding: 8px 10px;
+        border-radius: 999px;
+        background: #e7f3ed;
+        color: #18704c;
+        font-size: 13px;
+        font-weight: 800;
+      }
+      .status::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #18704c;
+      }
+      .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      button {
+        min-height: 44px;
+        border: 0;
+        border-radius: 8px;
+        background: #17211d;
+        color: white;
+        cursor: pointer;
+        font-weight: 800;
+      }
+      button:hover { filter: brightness(1.08); }
+      button:disabled { cursor: wait; opacity: 0.7; }
+      .conversation {
+        min-height: 180px;
+        max-height: 340px;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .message {
+        max-width: 92%;
+        padding: 11px 12px;
+        border-radius: 8px;
+        line-height: 1.35;
+        font-size: 14px;
+      }
+      .driver { align-self: flex-end; background: #e7edf3; }
+      .assistant { align-self: flex-start; background: #e7f3ed; }
+      .answer {
+        border: 1px solid #b9d7ca;
+        background: #f2faf6;
+      }
+      .map {
+        min-height: 300px;
+        position: relative;
+        overflow: hidden;
+        background:
+          linear-gradient(90deg, rgba(24, 112, 76, 0.08) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(24, 112, 76, 0.08) 1px, transparent 1px),
+          #f7f4ea;
+        background-size: 48px 48px;
+      }
+      .road, .route {
+        position: absolute;
+        border-radius: 999px;
+        transform-origin: center;
+      }
+      .road.main { width: 120%; height: 34px; left: -10%; top: 52%; background: #c7c0b4; transform: rotate(-16deg); }
+      .road.branch { width: 65%; height: 26px; left: 42%; top: 28%; background: #d6cec1; transform: rotate(43deg); }
+      .route { width: 54%; height: 8px; left: 22%; top: 49%; background: #215f88; transform: rotate(-16deg); box-shadow: 0 0 0 4px rgba(33, 95, 136, 0.12); }
+      .pin {
+        position: absolute;
+        display: grid;
+        place-items: center;
+        min-width: 72px;
+        min-height: 38px;
+        padding: 0 10px;
+        border-radius: 8px;
+        color: white;
+        font-size: 13px;
+        font-weight: 850;
+        box-shadow: 0 10px 20px rgba(23, 33, 29, 0.18);
+      }
+      .you { left: 18%; top: 55%; background: #18704c; }
+      .place { right: 18%; top: 38%; background: #215f88; }
+      .parking { right: 28%; bottom: 20%; background: #6b5a2d; }
+      .alert { right: 36%; top: 24%; min-width: 38px; background: #b56a14; }
+      .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+      .meta-grid div, .result, .step {
+        border: 1px solid #d6ddd9;
+        border-radius: 8px;
+        padding: 10px;
+      }
+      .meta-grid strong { display: block; font-size: 22px; }
+      .meta-grid span, .result span, .step { color: #5d6963; }
+      .results, .steps { display: grid; gap: 8px; }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 220px;
+        overflow: auto;
+        margin: 0;
+        padding: 12px;
+        border-radius: 8px;
+        background: #101815;
+        color: #d8f3e7;
+        font-size: 12px;
+      }
+      @media (max-width: 920px) {
+        main { grid-template-columns: 1fr; padding: 8px; gap: 8px; }
+      }
+      @media (max-width: 560px) {
+        .actions, .meta-grid { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
     <main>
-      <h1>ParkShare Alexa+ MCP</h1>
-      <p>
-        A production-style HTTPS endpoint for the ParkShare Alexa+ mobility copilot.
-        MCP clients can call <code>POST /mcp</code> to discover and use parking, nearby-place,
-        road-alert and spot-release tools.
-      </p>
-      <div class="grid">
-        <div class="card"><strong>Endpoint</strong><code>/mcp</code></div>
-        <div class="card"><strong>Protocol</strong>MCP Streamable HTTP / JSON-RPC</div>
-        <div class="card"><strong>Tools</strong>${toolDefinitions.length} ParkShare tools</div>
-        <div class="card"><strong>Status</strong>Ready for Alexa+ demo connection</div>
+      <div class="left">
+        <section>
+          <div class="brand-mark">P</div>
+          <h1>ParkShare Alexa+ MCP</h1>
+          <p>
+            Interactive demo for the ParkShare Alexa+ mobility copilot. These buttons call the live
+            <code>POST /mcp</code> endpoint on this Site and render the answer as a driver-facing assistant.
+          </p>
+          <div class="status">MCP endpoint live</div>
+        </section>
+
+        <section>
+          <h2>Demo scenarios</h2>
+          <div class="actions" id="actions"></div>
+        </section>
+
+        <section>
+          <h2>Conversation</h2>
+          <div class="conversation" id="conversation" aria-live="polite"></div>
+        </section>
+      </div>
+
+      <div class="right">
+        <section class="answer">
+          <h2>Assistant answer</h2>
+          <p id="assistantAnswer">Choose a scenario to call the ParkShare MCP server.</p>
+        </section>
+
+        <section class="map" aria-label="Route preview">
+          <div class="road main"></div>
+          <div class="road branch"></div>
+          <div class="route"></div>
+          <div class="pin you">You</div>
+          <div class="pin place" id="placePin">Place</div>
+          <div class="pin parking">Parking</div>
+          <div class="pin alert">Alert</div>
+        </section>
+
+        <section>
+          <h2 id="contextTitle">Current mobility context</h2>
+          <div class="meta-grid">
+            <div><strong id="toolCount">${toolDefinitions.length}</strong><span>ParkShare tools</span></div>
+            <div><strong id="endpointLabel">/mcp</strong><span>HTTPS endpoint</span></div>
+            <div><strong id="statusLabel">Ready</strong><span>Alexa+ connection</span></div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Action log</h2>
+          <div class="steps" id="steps"></div>
+        </section>
+
+        <section>
+          <h2>Structured result</h2>
+          <div class="results" id="results"></div>
+        </section>
+
+        <section>
+          <h2>MCP response</h2>
+          <pre id="rawResponse">{}</pre>
+        </section>
       </div>
     </main>
+    <script>
+      const scenarios = ${JSON.stringify(pageScenarios)};
+      const actions = document.querySelector("#actions");
+      const conversation = document.querySelector("#conversation");
+      const assistantAnswer = document.querySelector("#assistantAnswer");
+      const contextTitle = document.querySelector("#contextTitle");
+      const placePin = document.querySelector("#placePin");
+      const steps = document.querySelector("#steps");
+      const results = document.querySelector("#results");
+      const rawResponse = document.querySelector("#rawResponse");
+
+      function addMessage(className, text) {
+        const node = document.createElement("div");
+        node.className = "message " + className;
+        node.textContent = text;
+        conversation.appendChild(node);
+        conversation.scrollTop = conversation.scrollHeight;
+      }
+
+      function renderSteps(items) {
+        steps.replaceChildren();
+        items.forEach((text) => {
+          const node = document.createElement("div");
+          node.className = "step";
+          node.textContent = text;
+          steps.appendChild(node);
+        });
+      }
+
+      function renderStructured(data) {
+        results.replaceChildren();
+        const entries = Object.entries(data || {});
+        if (!entries.length) {
+          const node = document.createElement("div");
+          node.className = "result";
+          node.textContent = "No structured result yet.";
+          results.appendChild(node);
+          return;
+        }
+
+        entries.slice(0, 6).forEach(([key, value]) => {
+          const node = document.createElement("div");
+          node.className = "result";
+          const strong = document.createElement("strong");
+          strong.textContent = key;
+          const span = document.createElement("span");
+          span.textContent = Array.isArray(value)
+            ? value.map((item) => item.name || item.label || item.id || JSON.stringify(item)).join(" | ")
+            : typeof value === "object" && value !== null
+              ? JSON.stringify(value)
+              : String(value);
+          node.append(strong, span);
+          results.appendChild(node);
+        });
+      }
+
+      async function callScenario(key) {
+        const scenario = scenarios[key];
+        document.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+        addMessage("driver", scenario.driver);
+        assistantAnswer.textContent = "Calling ParkShare MCP...";
+        contextTitle.textContent = scenario.context;
+        placePin.textContent = scenario.label.replace("Find ", "");
+        renderSteps(scenario.steps);
+
+        try {
+          const response = await fetch("/mcp", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: Date.now(),
+              method: "tools/call",
+              params: { name: scenario.tool, arguments: scenario.args }
+            })
+          });
+          const data = await response.json();
+          const answer = data.result && data.result.content && data.result.content[0]
+            ? data.result.content[0].text
+            : "The MCP server answered, but no speech text was returned.";
+
+          assistantAnswer.textContent = answer;
+          addMessage("assistant", answer);
+          renderStructured(data.result ? data.result.structuredContent : data);
+          rawResponse.textContent = JSON.stringify(data, null, 2);
+        } catch (error) {
+          assistantAnswer.textContent = "The browser could not call the MCP endpoint.";
+          addMessage("assistant", assistantAnswer.textContent);
+          rawResponse.textContent = String(error && error.message ? error.message : error);
+        } finally {
+          document.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+        }
+      }
+
+      Object.entries(scenarios).forEach(([key, scenario]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = scenario.label;
+        button.addEventListener("click", () => callScenario(key));
+        actions.appendChild(button);
+      });
+
+      renderSteps(["Choose a demo scenario", "The page will call POST /mcp", "The assistant answer will appear here"]);
+      renderStructured({});
+    </script>
   </body>
 </html>`;
 
