@@ -165,6 +165,14 @@ const toolDefinitions = [
           type: "string",
           description: "Route origin or current location label."
         },
+        latitude: {
+          type: "number",
+          description: "Current route origin latitude, required when origin is the user's live location."
+        },
+        longitude: {
+          type: "number",
+          description: "Current route origin longitude, required when origin is the user's live location."
+        },
         destination: {
           type: "string",
           description: "Route destination."
@@ -242,13 +250,14 @@ const pageScenarios = {
     ]
   },
   parking: {
-    label: "Find parking",
-    driver: "Alexa, ask ParkShare to guide me to parking near Mercadona Montblanc.",
+    label: "Find parking near me",
+    driver: "Alexa, ask ParkShare to find parking near my location.",
     tool: "find_parking_near_destination",
-    args: { destination: "Mercadona Montblanc", requirePreviousSpotConfirmation: true },
-    context: "Destination parking guidance",
+    args: { destination: "my current location", requirePreviousSpotConfirmation: true },
+    needsLocation: true,
+    context: "Parking guidance from the active location",
     steps: [
-      "Load destination context",
+      "Use browser, approximate or typed driver location",
       "Check active parking stock",
       "Select closest practical parking lead",
       "Ask whether the previous spot was left free"
@@ -259,9 +268,10 @@ const pageScenarios = {
     driver: "Alexa, ask ParkShare if there are road alerts on my route.",
     tool: "get_road_alerts",
     args: { origin: "current_location", destination: "Montblanc", includeAlternativeRoute: true },
+    needsLocation: true,
     context: "Community route alerts",
     steps: [
-      "Read current route",
+      "Use browser, approximate or typed driver location",
       "Check active controls, cameras and traffic reports",
       "Compare primary and alternate route",
       "Prepare short driving-safe recommendation"
@@ -488,7 +498,7 @@ const page = `<!doctype html>
           </div>
           <label for="manualLocation">Approximate city or address</label>
           <input id="manualLocation" type="text" placeholder="Madrid, Zaragoza, London..." autocomplete="street-address">
-          <small>Leave these empty to request browser GPS. A city or address is only an approximate fallback, never your exact location.</small>
+          <small>Leave these empty to request browser GPS for this search. If this embedded browser cannot show the GPS permission prompt, open the demo in Chrome/Safari or enter exact coordinates. A city or address is only an approximate fallback, never your exact location.</small>
         </section>
 
         <section>
@@ -599,8 +609,10 @@ const page = `<!doctype html>
 
       function getBrowserLocation() {
         return new Promise((resolve, reject) => {
-          if (!("geolocation" in navigator)) {
-            reject(new Error("Browser geolocation is not available."));
+          if (typeof navigator === "undefined" || !navigator.geolocation) {
+            const error = new Error("This browser does not expose GPS location.");
+            error.code = "GEOLOCATION_UNSUPPORTED";
+            reject(error);
             return;
           }
 
@@ -610,10 +622,55 @@ const page = `<!doctype html>
               longitude: position.coords.longitude,
               accuracyMeters: position.coords.accuracy
             }),
-            (error) => reject(error),
+            (error) => {
+              const wrapped = new Error(error && error.message
+                ? error.message
+                : "Browser GPS was not available.");
+              wrapped.code = error && error.code;
+              reject(wrapped);
+            },
             { enableHighAccuracy: true, maximumAge: 60000, timeout: 12000 }
           );
         });
+      }
+
+      function getLocationFailureMessage(error) {
+        if (error && error.code === "GEOLOCATION_UNSUPPORTED") {
+          return "This embedded browser cannot open the GPS permission prompt. Open the demo in Chrome/Safari, or enter exact coordinates before searching.";
+        }
+
+        if (error && error.code === 1) {
+          return "Location permission was denied. Allow browser location for this site, or enter exact coordinates before searching.";
+        }
+
+        if (error && error.code === 2) {
+          return "The browser could not determine your current GPS position. Try again outside this embedded browser, or enter exact coordinates.";
+        }
+
+        if (error && error.code === 3) {
+          return "The GPS request timed out. Try again, open the demo in Chrome/Safari, or enter exact coordinates.";
+        }
+
+        return "Browser GPS was not available. Open the demo in Chrome/Safari, or enter exact coordinates before searching.";
+      }
+
+      function showMissingLocationResult(scenario, driverText, message) {
+        const structuredContent = {
+          query: scenario.args && scenario.args.query ? scenario.args.query : scenario.tool,
+          locationSource: "missing_location",
+          needsLocation: true,
+          results: []
+        };
+        const data = {
+          content: [{ type: "text", text: message }],
+          structuredContent
+        };
+
+        assistantAnswer.textContent = message;
+        addMessage("driver", driverText);
+        addMessage("assistant", message);
+        renderStructured(structuredContent);
+        rawResponse.textContent = JSON.stringify(data, null, 2);
       }
 
       async function fetchDemoResult(tool, args) {
@@ -686,6 +743,70 @@ const page = `<!doctype html>
         }
 
         return { latitude, longitude };
+      }
+
+      function getLocationDriverText(scenario, source) {
+        if (scenario.tool === "find_parking_near_destination") {
+          if (source === "coordinates") {
+            return "Alexa, ask ParkShare to find parking near these exact coordinates.";
+          }
+          if (source === "typed") {
+            return "Alexa, ask ParkShare to find parking near this typed city or address.";
+          }
+          return "Alexa, ask ParkShare to find parking near my location.";
+        }
+
+        if (scenario.tool === "get_road_alerts") {
+          if (source === "coordinates") {
+            return "Alexa, ask ParkShare if there are road alerts from these exact coordinates.";
+          }
+          if (source === "typed") {
+            return "Alexa, ask ParkShare if there are road alerts from this typed city or address.";
+          }
+          return "Alexa, ask ParkShare if there are road alerts from my location.";
+        }
+
+        if (source === "coordinates") {
+          return "Alexa, ask ParkShare to find the nearest supermarket from these exact coordinates.";
+        }
+        if (source === "typed") {
+          return "Alexa, ask ParkShare to find the nearest supermarket from this typed city or address.";
+        }
+        return "Alexa, ask ParkShare to find the nearest supermarket from my location.";
+      }
+
+      function getLocationProgressMessage(scenario, source) {
+        const target =
+          scenario.tool === "find_parking_near_destination"
+            ? "parking"
+            : scenario.tool === "get_road_alerts"
+              ? "road alerts"
+              : "supermarkets";
+
+        if (source === "coordinates") {
+          return "Searching " + target + " from the exact coordinates you entered...";
+        }
+        if (source === "typed") {
+          return "Searching " + target + " from the approximate typed place...";
+        }
+        return "Searching " + target + " near this location...";
+      }
+
+      function getLocationAcknowledgement(scenario, source) {
+        const target =
+          scenario.tool === "find_parking_near_destination"
+            ? "parking"
+            : scenario.tool === "get_road_alerts"
+              ? "road alerts"
+              : "the nearest supermarket";
+
+        if (source === "coordinates") {
+          return "I will search " + target + " from the exact coordinates you entered.";
+        }
+        if (source === "typed") {
+          return "I will search " + target + " from the typed city or address as an approximate starting point.";
+        }
+        return "Location allowed. Searching " + target + " now.";
       }
 
       function describeLocationForSpeech(source, label) {
@@ -825,18 +946,18 @@ const page = `<!doctype html>
               args.locationSource = "typed_coordinates";
               args.locationLabel =
                 typedCoordinates.latitude.toFixed(6) + ", " + typedCoordinates.longitude.toFixed(6);
-              driverText = "Alexa, ask ParkShare to find the nearest supermarket from these exact coordinates.";
-              assistantAnswer.textContent = "Searching supermarkets from the coordinates you entered...";
+              driverText = getLocationDriverText(scenario, "coordinates");
+              assistantAnswer.textContent = getLocationProgressMessage(scenario, "coordinates");
               addMessage("driver", driverText);
-              addMessage("assistant", "I will search from the exact coordinates you entered.");
+              addMessage("assistant", getLocationAcknowledgement(scenario, "coordinates"));
             } else if (manualText) {
               args.locationText = manualText;
               args.locationSource = "manual_location_text";
               args.locationLabel = manualText;
-              driverText = "Alexa, ask ParkShare to find the nearest supermarket from this typed city or address.";
-              assistantAnswer.textContent = "Searching supermarkets from the approximate typed place...";
+              driverText = getLocationDriverText(scenario, "typed");
+              assistantAnswer.textContent = getLocationProgressMessage(scenario, "typed");
               addMessage("driver", driverText);
-              addMessage("assistant", "I will search from the typed city or address as an approximate starting point.");
+              addMessage("assistant", getLocationAcknowledgement(scenario, "typed"));
             } else {
               try {
                 const location = await getBrowserLocation();
@@ -845,15 +966,19 @@ const page = `<!doctype html>
                 args.accuracyMeters = location.accuracyMeters;
                 args.locationSource = "browser_geolocation";
                 args.locationLabel = "your precise browser location";
-                assistantAnswer.textContent = "Searching supermarkets near this location...";
+                driverText = getLocationDriverText(scenario, "browser");
+                assistantAnswer.textContent = getLocationProgressMessage(scenario, "browser");
                 addMessage("driver", driverText);
-                addMessage("assistant", "Location allowed. Searching the nearest supermarket now.");
+                addMessage("assistant", getLocationAcknowledgement(scenario, "browser"));
               } catch (locationError) {
                 args.locationSource = "missing_location";
-                driverText = "Alexa, ask ParkShare to find the nearest supermarket from my location.";
-                assistantAnswer.textContent = "Browser GPS was not available.";
-                addMessage("driver", driverText);
-                addMessage("assistant", "I need browser location permission, exact coordinates, or a typed city/address to search nearby supermarkets.");
+                driverText = getLocationDriverText(scenario, "browser");
+                showMissingLocationResult(
+                  scenario,
+                  driverText,
+                  getLocationFailureMessage(locationError)
+                );
+                return;
               }
             }
           } else {
@@ -1002,8 +1127,14 @@ async function handleDemo(request) {
   }
 
   try {
+    const toolCanUseCurrentLocation = [
+      "find_nearby_place",
+      "find_parking_near_destination",
+      "get_road_alerts"
+    ].includes(tool);
+
     if (
-      tool === "find_nearby_place" &&
+      toolCanUseCurrentLocation &&
       !hasValidCoordinates(args.latitude, args.longitude) &&
       typeof args.locationText === "string" &&
       args.locationText.trim()
@@ -1022,7 +1153,7 @@ async function handleDemo(request) {
         ? getApproximateRequestLocation(request)
         : null;
     if (
-      tool === "find_nearby_place" &&
+      toolCanUseCurrentLocation &&
       !hasValidCoordinates(args.latitude, args.longitude) &&
       requestLocation
     ) {
@@ -1517,15 +1648,29 @@ async function findNearbyPlace(args) {
 function findParkingNearDestination(args) {
   const requireConfirmation = args.requirePreviousSpotConfirmation !== false;
   const best = demoParking[0];
+  const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+  const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "demo_destination");
+  const locationLabel = args.locationLabel || args.destination || "the selected destination";
+  const targetDescription = hasCoordinates
+    ? describeStartLocation(locationSource, locationLabel)
+    : args.destination;
 
   return {
     spoken:
-      `The closest practical parking lead near ${args.destination} is ${best.distanceMeters} meters away. ` +
+      `Using ${targetDescription}, the closest practical parking lead is ${best.distanceMeters} meters away. ` +
       (requireConfirmation
         ? "Before I start the route, did you leave your previous parking spot free?"
         : "I can start guidance with this parking target."),
     data: {
       destination: args.destination,
+      locationSource,
+      locationLabel,
+      destinationCoordinates: hasCoordinates
+        ? {
+            latitude: Number(args.latitude),
+            longitude: Number(args.longitude)
+          }
+        : null,
       requirePreviousSpotConfirmation: requireConfirmation,
       parkingLeads: demoParking
     }
@@ -1534,14 +1679,28 @@ function findParkingNearDestination(args) {
 
 function getRoadAlerts(args) {
   const primary = demoAlerts[0];
+  const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+  const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "demo_origin");
+  const locationLabel = args.locationLabel || args.origin || "current location";
+  const originDescription = hasCoordinates
+    ? describeStartLocation(locationSource, locationLabel)
+    : args.origin || "current location";
 
   return {
     spoken:
-      `I found ${demoAlerts.length} community alerts on the route to ${args.destination}. ` +
+      `Using ${originDescription}, I found ${demoAlerts.length} community alerts on the route to ${args.destination}. ` +
       `${primary.label} is ${primary.distanceKm} kilometers ahead. ` +
       `The alternate route is about ${primary.alternateRouteDeltaMinutes} minutes slower.`,
     data: {
       origin: args.origin || "current_location",
+      locationSource,
+      locationLabel,
+      originCoordinates: hasCoordinates
+        ? {
+            latitude: Number(args.latitude),
+            longitude: Number(args.longitude)
+          }
+        : null,
       destination: args.destination,
       includeAlternativeRoute: args.includeAlternativeRoute !== false,
       alerts: demoAlerts
