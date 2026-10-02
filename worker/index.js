@@ -78,6 +78,15 @@ const demoAlerts = [
   }
 ];
 
+const fallbackLocation = {
+  latitude: 41.3762,
+  longitude: 1.1619,
+  label: "Montblanc demo fallback",
+  source: "demo_montblanc_fallback"
+};
+
+const supermarketSearchRadiiMeters = [5000, 15000, 50000, 100000];
+
 const toolDefinitions = [
   {
     name: "find_nearby_place",
@@ -210,16 +219,17 @@ const toolDefinitions = [
 
 const pageScenarios = {
   supermarket: {
-    label: "Find supermarket",
-    driver: "Alexa, ask ParkShare to find the nearest supermarket.",
+    label: "Find supermarket near me",
+    driver: "Alexa, ask ParkShare to find the nearest supermarket from my location.",
     tool: "find_nearby_place",
     args: { query: "supermarket", maxResults: 3 },
-    context: "Current-location search from Montblanc camping area",
+    needsLocation: true,
+    context: "Live supermarket search from browser location",
     steps: [
-      "Read current driver location",
-      "Search nearby places without city limits",
+      "Ask the browser for driver location",
+      "Search OpenStreetMap supermarkets around that point",
       "Rank results by practical driving distance",
-      "Check parking leads around the best result"
+      "Draw a route to the closest supermarket when routing is available"
     ]
   },
   parking: {
@@ -269,6 +279,10 @@ const page = `<!doctype html>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>ParkShare Alexa+ MCP</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    >
     <style>
       :root {
         color-scheme: light;
@@ -363,40 +377,24 @@ const page = `<!doctype html>
         background: #f2faf6;
       }
       .map {
-        min-height: 300px;
-        position: relative;
+        min-height: 390px;
         overflow: hidden;
-        background:
-          linear-gradient(90deg, rgba(24, 112, 76, 0.08) 1px, transparent 1px),
-          linear-gradient(0deg, rgba(24, 112, 76, 0.08) 1px, transparent 1px),
-          #f7f4ea;
-        background-size: 48px 48px;
+        padding: 0;
+        background: #dce7e2;
       }
-      .road, .route {
-        position: absolute;
-        border-radius: 999px;
-        transform-origin: center;
+      #map {
+        width: 100%;
+        min-height: 390px;
+        height: 100%;
       }
-      .road.main { width: 120%; height: 34px; left: -10%; top: 52%; background: #c7c0b4; transform: rotate(-16deg); }
-      .road.branch { width: 65%; height: 26px; left: 42%; top: 28%; background: #d6cec1; transform: rotate(43deg); }
-      .route { width: 54%; height: 8px; left: 22%; top: 49%; background: #215f88; transform: rotate(-16deg); box-shadow: 0 0 0 4px rgba(33, 95, 136, 0.12); }
-      .pin {
-        position: absolute;
+      .map-placeholder {
         display: grid;
+        min-height: 390px;
         place-items: center;
-        min-width: 72px;
-        min-height: 38px;
-        padding: 0 10px;
-        border-radius: 8px;
-        color: white;
-        font-size: 13px;
-        font-weight: 850;
-        box-shadow: 0 10px 20px rgba(23, 33, 29, 0.18);
+        padding: 18px;
+        text-align: center;
+        color: #5d6963;
       }
-      .you { left: 18%; top: 55%; background: #18704c; }
-      .place { right: 18%; top: 38%; background: #215f88; }
-      .parking { right: 28%; bottom: 20%; background: #6b5a2d; }
-      .alert { right: 36%; top: 24%; min-width: 38px; background: #b56a14; }
       .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
       .meta-grid div, .result, .step {
         border: 1px solid #d6ddd9;
@@ -433,9 +431,10 @@ const page = `<!doctype html>
           <div class="brand-mark">P</div>
           <h1>ParkShare Alexa+ MCP</h1>
           <p>
-            Interactive demo for the ParkShare Alexa+ mobility copilot. MCP clients use
-            <code>POST /mcp</code>; this browser demo calls <code>POST /demo</code>, backed by the same
-            ParkShare tool functions, and renders the answer as a driver-facing assistant.
+            Interactive demo for the ParkShare Alexa+ mobility copilot. The supermarket flow uses the
+            visitor's browser location when they allow it, searches live OpenStreetMap data, and draws
+            the route on a real map. MCP clients use <code>POST /mcp</code>; this browser demo calls
+            <code>POST /demo</code>, backed by the same ParkShare tool functions.
           </p>
           <div class="status">MCP endpoint live</div>
         </section>
@@ -458,13 +457,9 @@ const page = `<!doctype html>
         </section>
 
         <section class="map" aria-label="Route preview">
-          <div class="road main"></div>
-          <div class="road branch"></div>
-          <div class="route"></div>
-          <div class="pin you">You</div>
-          <div class="pin place" id="placePin">Place</div>
-          <div class="pin parking">Parking</div>
-          <div class="pin alert">Alert</div>
+          <div id="map">
+            <div class="map-placeholder">Choose a supermarket scenario and allow location to draw a live route.</div>
+          </div>
         </section>
 
         <section>
@@ -492,16 +487,20 @@ const page = `<!doctype html>
         </section>
       </div>
     </main>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
       const scenarios = ${JSON.stringify(pageScenarios)};
       const actions = document.querySelector("#actions");
       const conversation = document.querySelector("#conversation");
       const assistantAnswer = document.querySelector("#assistantAnswer");
       const contextTitle = document.querySelector("#contextTitle");
-      const placePin = document.querySelector("#placePin");
       const steps = document.querySelector("#steps");
       const results = document.querySelector("#results");
       const rawResponse = document.querySelector("#rawResponse");
+      let map;
+      let routeLayer;
+      let driverMarker;
+      let placeMarker;
 
       function addMessage(className, text) {
         const node = document.createElement("div");
@@ -548,22 +547,110 @@ const page = `<!doctype html>
         });
       }
 
+      function getBrowserLocation() {
+        return new Promise((resolve, reject) => {
+          if (!("geolocation" in navigator)) {
+            reject(new Error("Browser geolocation is not available."));
+            return;
+          }
+
+          navigator.geolocation.getCurrentPosition(
+            (position) => resolve({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              accuracyMeters: position.coords.accuracy
+            }),
+            (error) => reject(error),
+            { enableHighAccuracy: true, maximumAge: 60000, timeout: 12000 }
+          );
+        });
+      }
+
+      function ensureMap(latitude, longitude) {
+        if (!window.L) return false;
+
+        if (!map) {
+          document.querySelector("#map").replaceChildren();
+          map = L.map("map", {
+            zoomControl: true,
+            attributionControl: true
+          }).setView([latitude, longitude], 13);
+
+          L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 19,
+            attribution: "&copy; OpenStreetMap contributors"
+          }).addTo(map);
+        }
+
+        return true;
+      }
+
+      function renderMap(data) {
+        const origin = data && data.originCoordinates;
+        const destination = data && data.results && data.results[0];
+        if (!origin || !destination || !destination.latitude || !destination.longitude) return;
+        if (!ensureMap(origin.latitude, origin.longitude)) return;
+
+        if (routeLayer) routeLayer.remove();
+        if (driverMarker) driverMarker.remove();
+        if (placeMarker) placeMarker.remove();
+
+        driverMarker = L.marker([origin.latitude, origin.longitude]).addTo(map).bindPopup("Your location");
+        placeMarker = L.marker([destination.latitude, destination.longitude])
+          .addTo(map)
+          .bindPopup(destination.name || "Supermarket");
+
+        const routeCoordinates = data.route && Array.isArray(data.route.coordinates)
+          ? data.route.coordinates.map(([longitude, latitude]) => [latitude, longitude])
+          : [
+              [origin.latitude, origin.longitude],
+              [destination.latitude, destination.longitude]
+            ];
+
+        routeLayer = L.polyline(routeCoordinates, {
+          color: "#215f88",
+          weight: 5,
+          opacity: 0.9
+        }).addTo(map);
+
+        map.fitBounds(routeLayer.getBounds().pad(0.24));
+      }
+
       async function callScenario(key) {
         const scenario = scenarios[key];
         document.querySelectorAll("button").forEach((button) => { button.disabled = true; });
         addMessage("driver", scenario.driver);
-        assistantAnswer.textContent = "Calling ParkShare MCP...";
+        assistantAnswer.textContent = scenario.needsLocation
+          ? "Requesting browser location..."
+          : "Calling ParkShare MCP demo...";
         contextTitle.textContent = scenario.context;
-        placePin.textContent = scenario.label.replace("Find ", "");
         renderSteps(scenario.steps);
 
         try {
+          const args = { ...scenario.args };
+          if (scenario.needsLocation) {
+            try {
+              const location = await getBrowserLocation();
+              args.latitude = location.latitude;
+              args.longitude = location.longitude;
+              args.accuracyMeters = location.accuracyMeters;
+              args.locationSource = "browser_geolocation";
+              args.locationLabel = "your precise browser location";
+              assistantAnswer.textContent = "Searching supermarkets near this location...";
+              addMessage("assistant", "Location allowed. Searching the nearest supermarket now.");
+            } catch (locationError) {
+              args.locationSource = "network_approximate_location";
+              assistantAnswer.textContent = "Precise location was not available. Trying approximate network location...";
+              addMessage("assistant", "Precise location was not available. I will try an approximate network location instead.");
+            }
+          }
+
           const response = await fetch("/demo", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               tool: scenario.tool,
-              arguments: scenario.args
+              arguments: args
             })
           });
           const data = await response.json();
@@ -574,9 +661,10 @@ const page = `<!doctype html>
           assistantAnswer.textContent = answer;
           addMessage("assistant", answer);
           renderStructured(data.structuredContent || data);
+          renderMap(data.structuredContent || data);
           rawResponse.textContent = JSON.stringify(data, null, 2);
         } catch (error) {
-          assistantAnswer.textContent = "The browser could not call the MCP endpoint.";
+          assistantAnswer.textContent = "The browser could not complete this ParkShare demo request.";
           addMessage("assistant", assistantAnswer.textContent);
           rawResponse.textContent = String(error && error.message ? error.message : error);
         } finally {
@@ -703,7 +791,19 @@ async function handleDemo(request) {
   }
 
   try {
-    const result = callParkShareTool(tool, args);
+    const requestLocation = getApproximateRequestLocation(request);
+    if (
+      tool === "find_nearby_place" &&
+      !hasValidCoordinates(args.latitude, args.longitude) &&
+      requestLocation
+    ) {
+      args.latitude = requestLocation.latitude;
+      args.longitude = requestLocation.longitude;
+      args.locationSource = requestLocation.source;
+      args.locationLabel = requestLocation.label;
+    }
+
+    const result = await callParkShareTool(tool, args);
     return json({
       tool,
       content: [{ type: "text", text: result.spoken }],
@@ -751,7 +851,7 @@ async function dispatchRpc(payload) {
   }
 }
 
-function callTool(payload) {
+async function callTool(payload) {
   const name = payload.params?.name;
   const args = payload.params?.arguments || {};
 
@@ -759,7 +859,7 @@ function callTool(payload) {
     return rpcError(payload.id, -32602, "Missing tool name");
   }
 
-  const result = callParkShareTool(name, args);
+  const result = await callParkShareTool(name, args);
 
   return rpcResult(payload.id, {
     content: [{ type: "text", text: result.spoken }],
@@ -767,7 +867,7 @@ function callTool(payload) {
   });
 }
 
-function callParkShareTool(name, args) {
+async function callParkShareTool(name, args) {
   switch (name) {
     case "find_nearby_place":
       return findNearbyPlace(args);
@@ -784,9 +884,198 @@ function callParkShareTool(name, args) {
   }
 }
 
-function findNearbyPlace(args) {
+function hasValidCoordinates(latitude, longitude) {
+  const lat = Number(latitude);
+  const lon = Number(longitude);
+  return Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+}
+
+function getApproximateRequestLocation(request) {
+  const cf = request.cf || {};
+  const latitude = Number(cf.latitude);
+  const longitude = Number(cf.longitude);
+
+  if (!hasValidCoordinates(latitude, longitude)) {
+    return null;
+  }
+
+  const label = [cf.city, cf.region, cf.country].filter(Boolean).join(", ") || "approximate network location";
+  return {
+    latitude,
+    longitude,
+    label,
+    source: "network_approximate_location"
+  };
+}
+
+function haversineKm(from, to) {
+  const radiusKm = 6371;
+  const dLat = ((to.latitude - from.latitude) * Math.PI) / 180;
+  const dLon = ((to.longitude - from.longitude) * Math.PI) / 180;
+  const lat1 = (from.latitude * Math.PI) / 180;
+  const lat2 = (to.latitude * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return radiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatAddress(tags = {}) {
+  return [
+    tags["addr:street"],
+    tags["addr:housenumber"],
+    tags["addr:city"] || tags["addr:town"] || tags["addr:village"],
+    tags["addr:postcode"]
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function placeFromOsmElement(element, origin) {
+  const tags = element.tags || {};
+  const latitude = element.type === "node" ? element.lat : element.center?.lat;
+  const longitude = element.type === "node" ? element.lon : element.center?.lon;
+
+  if (!hasValidCoordinates(latitude, longitude)) {
+    return null;
+  }
+
+  const distanceKm = haversineKm(origin, { latitude, longitude });
+  const name = tags.name || tags.brand || "Supermarket";
+
+  return {
+    id: `osm-${element.type}-${element.id}`,
+    name,
+    type: "supermarket",
+    distanceKm: Number(distanceKm.toFixed(2)),
+    driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
+    address: formatAddress(tags) || tags.operator || tags.brand || "OpenStreetMap location",
+    parkingLeads: 0,
+    latitude,
+    longitude,
+    source: "openstreetmap"
+  };
+}
+
+async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
+  for (const radius of supermarketSearchRadiiMeters) {
+    const query = `
+      [out:json][timeout:12];
+      (
+        node["shop"="supermarket"](around:${radius},${origin.latitude},${origin.longitude});
+        way["shop"="supermarket"](around:${radius},${origin.latitude},${origin.longitude});
+        relation["shop"="supermarket"](around:${radius},${origin.latitude},${origin.longitude});
+      );
+      out center tags ${Math.max(maxResults * 6, 12)};
+    `;
+    const response = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, {
+      headers: {
+        "accept": "application/json",
+        "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
+      }
+    });
+
+    if (!response.ok) {
+      continue;
+    }
+
+    const data = await response.json();
+    const results = (data.elements || [])
+      .map((element) => placeFromOsmElement(element, origin))
+      .filter(Boolean)
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, maxResults);
+
+    if (results.length) {
+      return { radiusMeters: radius, results };
+    }
+  }
+
+  return null;
+}
+
+function thinRouteCoordinates(coordinates, maxPoints = 90) {
+  if (!Array.isArray(coordinates) || coordinates.length <= maxPoints) {
+    return coordinates || [];
+  }
+
+  const step = Math.ceil(coordinates.length / maxPoints);
+  const thinned = coordinates.filter((_, index) => index % step === 0);
+  const last = coordinates[coordinates.length - 1];
+  if (thinned[thinned.length - 1] !== last) {
+    thinned.push(last);
+  }
+  return thinned;
+}
+
+async function fetchDrivingRoute(origin, destination) {
+  const url =
+    `https://router.project-osrm.org/route/v1/driving/` +
+    `${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}` +
+    `?overview=full&geometries=geojson`;
+  const response = await fetch(url, { headers: { "accept": "application/json" } });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = await response.json();
+  const route = data.routes && data.routes[0];
+  if (!route) {
+    return null;
+  }
+
+  return {
+    source: "osrm",
+    distanceKm: Number((route.distance / 1000).toFixed(1)),
+    durationMinutes: Math.max(1, Math.round(route.duration / 60)),
+    coordinates: thinRouteCoordinates(route.geometry?.coordinates || [])
+  };
+}
+
+async function findNearbyPlace(args) {
   const query = String(args.query || "").toLowerCase();
   const maxResults = Math.min(Math.max(Number(args.maxResults || 3), 1), 5);
+
+  if (query.includes("supermarket") && hasValidCoordinates(args.latitude, args.longitude)) {
+    const origin = {
+      latitude: Number(args.latitude),
+      longitude: Number(args.longitude)
+    };
+    const live = await fetchOpenStreetMapSupermarkets(origin, maxResults);
+
+    if (live?.results?.length) {
+      const best = live.results[0];
+      const route = await fetchDrivingRoute(origin, best).catch(() => null);
+      if (route) {
+        best.distanceKm = route.distanceKm;
+        best.driveMinutes = route.durationMinutes;
+      }
+
+      const label = args.locationLabel || "your location";
+      const source =
+        args.locationSource ||
+        (args.accuracyMeters ? "browser_geolocation" : "provided_coordinates");
+
+      return {
+        spoken:
+          `Using ${source === "network_approximate_location" ? "your approximate network location" : label}, ` +
+          `I found ${best.name}, about ${best.distanceKm} kilometers away. ` +
+          `The drive is around ${best.driveMinutes} minutes.`,
+        data: {
+          query: args.query,
+          locationSource: source,
+          locationLabel: label,
+          accuracyMeters: args.accuracyMeters || null,
+          searchRadiusMeters: live.radiusMeters,
+          originCoordinates: origin,
+          results: live.results,
+          route
+        }
+      };
+    }
+  }
+
   const matches = demoPlaces
     .filter((place) => place.type.includes(query) || place.name.toLowerCase().includes(query))
     .slice(0, maxResults);
@@ -795,11 +1084,12 @@ function findNearbyPlace(args) {
 
   return {
     spoken:
-      `I found ${best.name}, about ${best.distanceKm} kilometers away. ` +
+      `I could not confirm live nearby places, so I used the Montblanc fallback demo. I found ${best.name}, about ${best.distanceKm} kilometers away. ` +
       `The drive is around ${best.driveMinutes} minutes and I found ${best.parkingLeads} parking leads nearby.`,
     data: {
       query: args.query,
-      locationSource: args.latitude && args.longitude ? "provided_coordinates" : "demo_current_location",
+      locationSource: "demo_montblanc_fallback",
+      originCoordinates: fallbackLocation,
       results
     }
   };

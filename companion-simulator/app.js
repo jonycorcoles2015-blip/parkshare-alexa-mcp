@@ -1,8 +1,8 @@
 const scenarios = {
   supermarket: {
-    driver: "Alexa, ask ParkShare to find the nearest supermarket.",
+    driver: "Alexa, ask ParkShare to find a supermarket from the Montblanc demo location.",
     answer:
-      "The best supermarket near your current position is Mercadona in Montblanc, about 5.2 kilometers away. I found three parking leads nearby and the fastest route takes around seven minutes.",
+      "Using the Montblanc demo location, the best supermarket is Mercadona in Montblanc, about 5.2 kilometers away. I found three parking leads nearby and the fastest route takes around seven minutes.",
     title: "Nearest supermarket found",
     subtitle: "Mercadona, Montblanc",
     eta: "7 min",
@@ -10,10 +10,10 @@ const scenarios = {
     distance: "5.2 km",
     parking: "3",
     alerts: "1",
-    safetyTitle: "Current-location search",
-    safetyCopy: "The assistant searches from where the driver is now, even outside large cities.",
+    safetyTitle: "Demo-location search",
+    safetyCopy: "The demo uses a fixed Montblanc camping location so judges can replay the same scenario.",
     log: [
-      "Read current driver location",
+      "Use fixed demo driver location near Montblanc",
       "Expanded nearby-place search beyond the current town",
       "Ranked supermarket results by practical driving distance",
       "Checked parking leads around the destination"

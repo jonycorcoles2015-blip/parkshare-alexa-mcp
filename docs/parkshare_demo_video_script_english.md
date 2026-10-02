@@ -34,9 +34,9 @@ Find supermarket
 
 Say:
 
-In this scenario, the driver asks ParkShare to find the nearest supermarket from the current location. This is important outside big cities, where the nearest useful place might be several kilometers away.
+In this demo scenario, the driver asks ParkShare to find the nearest supermarket from the judge's current browser location. This is important outside big cities, where the nearest useful place might be several kilometers away.
 
-The Alexa+ MCP tool reads the current driver location, expands the search, ranks the result by practical driving distance, and checks parking leads around the destination.
+The Alexa+ MCP tool can receive driver coordinates from the app. For this browser demo, the page first asks for browser GPS permission. If the user does not allow precise location, the server tries an approximate network location, expands the search with OpenStreetMap data, ranks supermarkets by practical distance, and draws a driving route with OSRM when available.
 
 ## 1:05 - 1:35 Scenario 2: parking-aware route
 
