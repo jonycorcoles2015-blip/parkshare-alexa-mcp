@@ -433,8 +433,9 @@ const page = `<!doctype html>
           <div class="brand-mark">P</div>
           <h1>ParkShare Alexa+ MCP</h1>
           <p>
-            Interactive demo for the ParkShare Alexa+ mobility copilot. These buttons call the live
-            <code>POST /mcp</code> endpoint on this Site and render the answer as a driver-facing assistant.
+            Interactive demo for the ParkShare Alexa+ mobility copilot. MCP clients use
+            <code>POST /mcp</code>; this browser demo calls <code>POST /demo</code>, backed by the same
+            ParkShare tool functions, and renders the answer as a driver-facing assistant.
           </p>
           <div class="status">MCP endpoint live</div>
         </section>
@@ -557,24 +558,22 @@ const page = `<!doctype html>
         renderSteps(scenario.steps);
 
         try {
-          const response = await fetch("/mcp", {
+          const response = await fetch("/demo", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              jsonrpc: "2.0",
-              id: Date.now(),
-              method: "tools/call",
-              params: { name: scenario.tool, arguments: scenario.args }
+              tool: scenario.tool,
+              arguments: scenario.args
             })
           });
           const data = await response.json();
-          const answer = data.result && data.result.content && data.result.content[0]
-            ? data.result.content[0].text
+          const answer = data.content && data.content[0]
+            ? data.content[0].text
             : "The MCP server answered, but no speech text was returned.";
 
           assistantAnswer.textContent = answer;
           addMessage("assistant", answer);
-          renderStructured(data.result ? data.result.structuredContent : data);
+          renderStructured(data.structuredContent || data);
           rawResponse.textContent = JSON.stringify(data, null, 2);
         } catch (error) {
           assistantAnswer.textContent = "The browser could not call the MCP endpoint.";
@@ -593,7 +592,7 @@ const page = `<!doctype html>
         actions.appendChild(button);
       });
 
-      renderSteps(["Choose a demo scenario", "The page will call POST /mcp", "The assistant answer will appear here"]);
+      renderSteps(["Choose a demo scenario", "The page will call POST /demo", "MCP clients keep using POST /mcp"]);
       renderStructured({});
     </script>
   </body>
@@ -671,6 +670,48 @@ async function handleMcp(request) {
   }
 
   return json(await dispatchRpc(payload));
+}
+
+async function handleDemo(request) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "access-control-allow-origin": "*",
+        "access-control-allow-headers": "content-type",
+        "access-control-allow-methods": "POST, OPTIONS"
+      }
+    });
+  }
+
+  if (request.method !== "POST") {
+    return json({ error: "Method not allowed" }, { status: 405 });
+  }
+
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (error) {
+    return json({ error: "Invalid demo request", message: error.message }, { status: 400 });
+  }
+
+  const tool = payload.tool;
+  const args = payload.arguments || {};
+
+  if (!tool || typeof tool !== "string") {
+    return json({ error: "Missing demo tool" }, { status: 400 });
+  }
+
+  try {
+    const result = callParkShareTool(tool, args);
+    return json({
+      tool,
+      content: [{ type: "text", text: result.spoken }],
+      structuredContent: result.data
+    });
+  } catch (error) {
+    return json({ error: error.message }, { status: 400 });
+  }
 }
 
 async function dispatchRpc(payload) {
@@ -856,6 +897,10 @@ export default {
 
     if (url.pathname === "/mcp") {
       return handleMcp(request);
+    }
+
+    if (url.pathname === "/demo") {
+      return handleDemo(request);
     }
 
     if (url.pathname === "/" || url.pathname === "/health") {
