@@ -4,19 +4,22 @@ ParkShare is a parking and driving assistant extended with an Alexa+ MCP server 
 
 This submission contains:
 
+- `worker/`: Cloudflare/Sites-compatible HTTPS MCP endpoint used for deployment.
 - `mcp-server/`: real MCP Streamable HTTP server exposing ParkShare mobility tools.
 - `companion-simulator/`: visual web demo for the video and judges.
 - `docs/`: Devpost text, demo script, action plan and upload checklist.
 
 ## Primary implementation
 
-The primary implementation is the MCP server, not the visual simulator.
+The primary implementation is the MCP endpoint, not the visual simulator.
 
 Architecture:
 
 ```text
 Alexa+ -> ParkShare MCP server -> ParkShare mobility tools -> parking/routes/alerts/search
 ```
+
+The deployable Sites worker lives in `worker/index.js` and exposes `/mcp` over HTTPS after publication.
 
 The server currently uses deterministic demo data so judges can run it locally. The tool interface is designed so the demo data can be replaced by real ParkShare backend endpoints without changing the Alexa+ tool contract.
 
@@ -61,6 +64,25 @@ The smoke test verifies:
 - `initialize`
 - `tools/list`
 - `tools/call` using `find_nearby_place`
+
+## Build the deployable Sites worker
+
+```bash
+npm run build
+npm run validate
+```
+
+The build creates:
+
+```text
+dist/
+├── .openai/
+│   └── hosting.json
+└── server/
+    └── index.js
+```
+
+`dist/server/index.js` exports `default.fetch(request, env, ctx)` for Sites.
 
 ## Companion simulator
 

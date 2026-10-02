@@ -1,0 +1,11 @@
+{
+  "name": "parkshare-alexa-hackathon-submission",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-site.mjs",
+    "validate": "node scripts/validate-artifact.mjs"
+  },
+  "license": "MIT"
+}
