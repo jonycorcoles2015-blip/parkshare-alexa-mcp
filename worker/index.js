@@ -11,6 +11,8 @@ const reverseGeocodingTimeoutMs = 3000;
 const dgtTrafficAlertTimeoutMs = 5500;
 const parkingSpotMaxAgeMinutes = 20;
 const officialRoadAlertRadiusKm = 25;
+const regionalRoadAlertRadiusKm = 100;
+const communityRoadAlertRadiusKm = 25;
 const overpassTimeoutMs = 12000;
 const overpassOverallTimeoutMs = 12000;
 const routeTimeoutMs = 8000;
@@ -25,6 +27,13 @@ const overpassEndpoints = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter"
 ];
+const communityRoadAlertTypes = {
+  mobile_control: { label: "Control movil", lifetimeMinutes: 45 },
+  accident: { label: "Accidente", lifetimeMinutes: 120 },
+  traffic_jam: { label: "Retencion", lifetimeMinutes: 60 },
+  road_hazard: { label: "Peligro en la via", lifetimeMinutes: 180 },
+  roadworks: { label: "Obras", lifetimeMinutes: 240 }
+};
 const groceryShopValues = ["supermarket", "convenience", "greengrocer", "general", "department_store"];
 const livePlaceCategories = [
   {
@@ -190,6 +199,38 @@ const toolDefinitions = [
     }
   },
   {
+    name: "report_road_alert",
+    description:
+      "Create a real, temporary ParkShare community road alert at the reporter's precise location.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        alertType: {
+          type: "string",
+          enum: Object.keys(communityRoadAlertTypes),
+          description: "Type of road alert observed by the driver."
+        },
+        latitude: { type: "number", description: "Precise alert latitude." },
+        longitude: { type: "number", description: "Precise alert longitude." },
+        note: { type: "string", maxLength: 180, description: "Optional short safety note." }
+      },
+      required: ["alertType", "latitude", "longitude"]
+    }
+  },
+  {
+    name: "confirm_road_alert",
+    description:
+      "Confirm that a ParkShare community alert is still present or report that it has cleared.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        alertId: { type: "string" },
+        observation: { type: "string", enum: ["still_present", "cleared"] }
+      },
+      required: ["alertId", "observation"]
+    }
+  },
+  {
     name: "release_parking_spot",
     description:
       "Mark the driver's previous parking spot as free for nearby ParkShare users.",
@@ -307,6 +348,62 @@ const pageScenarios = {
       "Comprobar controles, radares y avisos de trafico activos",
       "Comparar ruta principal y alternativa",
       "Preparar recomendacion breve y segura para conducir"
+    ]
+  },
+  reportControl: {
+    label: "Avisar control movil",
+    driver: "Alexa, dile a ParkShare que hay un control movil en mi ubicacion.",
+    tool: "report_road_alert",
+    args: { alertType: "mobile_control" },
+    needsLocation: true,
+    context: "Aviso comunitario real de control movil",
+    steps: [
+      "Tomar la ubicacion GPS precisa",
+      "Publicar el aviso con hora y direccion",
+      "Mostrarlo a conductores cercanos",
+      "Caducarlo si nadie confirma que sigue activo"
+    ]
+  },
+  reportAccident: {
+    label: "Avisar accidente",
+    driver: "Alexa, dile a ParkShare que hay un accidente en mi ubicacion.",
+    tool: "report_road_alert",
+    args: { alertType: "accident" },
+    needsLocation: true,
+    context: "Aviso comunitario real de accidente",
+    steps: [
+      "Tomar la ubicacion GPS precisa",
+      "Publicar el aviso con hora y direccion",
+      "Mostrarlo a conductores cercanos",
+      "Permitir confirmaciones y retirada"
+    ]
+  },
+  reportTraffic: {
+    label: "Avisar retencion",
+    driver: "Alexa, dile a ParkShare que hay una retencion en mi ubicacion.",
+    tool: "report_road_alert",
+    args: { alertType: "traffic_jam" },
+    needsLocation: true,
+    context: "Aviso comunitario real de retencion",
+    steps: [
+      "Tomar la ubicacion GPS precisa",
+      "Publicar el aviso con hora y direccion",
+      "Mostrarlo a conductores cercanos",
+      "Caducarlo si deja de confirmarse"
+    ]
+  },
+  reportHazard: {
+    label: "Avisar peligro",
+    driver: "Alexa, dile a ParkShare que hay un peligro en la via en mi ubicacion.",
+    tool: "report_road_alert",
+    args: { alertType: "road_hazard" },
+    needsLocation: true,
+    context: "Aviso comunitario real de peligro en la via",
+    steps: [
+      "Tomar la ubicacion GPS precisa",
+      "Publicar el aviso con hora y direccion",
+      "Mostrarlo a conductores cercanos",
+      "Permitir confirmaciones y retirada"
     ]
   },
   release: {
@@ -519,6 +616,13 @@ const page = `<!doctype html>
         font-size: 13px;
         line-height: 1.35;
       }
+      .alert-confirmation-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 6px;
+      }
+      .alert-confirmation-actions button { min-height: 38px; padding: 8px 10px; }
       .nearby-badge {
         justify-self: start;
         border-radius: 999px;
@@ -724,6 +828,7 @@ const page = `<!doctype html>
       const maxUsableBrowserAccuracyMeters = ${maxUsableBrowserAccuracyMeters};
       const browserLocationStorageKey = "parkshareDemoBrowserLocation";
       const releasedParkingStorageKey = "parkshareDemoReleasedParkingSpots";
+      const reporterStorageKey = "parkshareDemoReporterId";
       const maxCachedBrowserLocationAgeMs = 24 * 60 * 60 * 1000;
       const releasedParkingMaxAgeMs = ${parkingSpotMaxAgeMinutes} * 60 * 1000;
       const browserLocationAttemptCount = 4;
@@ -739,6 +844,16 @@ const page = `<!doctype html>
       let initialLocationRequestStarted = false;
       let lastPermissionState = "checking";
       let lastLocationError = null;
+
+      function getClientReporterId() {
+        const existing = localStorage.getItem(reporterStorageKey);
+        if (existing) return existing;
+        const created = typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : "device-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        localStorage.setItem(reporterStorageKey, created);
+        return created;
+      }
 
       function addMessage(className, text) {
         const node = document.createElement("div");
@@ -788,6 +903,9 @@ const page = `<!doctype html>
       function formatPlaceAvailabilityLabel(place) {
         if (!place) return "horario no confirmado";
         if (place.official) return "alerta oficial";
+        if (place.source === "parkshare_community") {
+          return "aviso ParkShare · " + Number(place.confirmations || 1) + " confirmaciones";
+        }
         if (place.source === "parkshare_user_reported_session") return "reportado por usuario";
         if (place.category === "parking" || place.type === "parking" || place.type === "parking_space") {
           if (String(place.fee || "").toLowerCase() === "no") return "parking real gratuito";
@@ -807,16 +925,22 @@ const page = `<!doctype html>
 
       function renderNearbyResults(data) {
         nearbyResults.replaceChildren();
-        const places = data && Array.isArray(data.results)
+        const places = data && Array.isArray(data.alerts) && data.alerts.length
+          ? data.alerts
+          : data && Array.isArray(data.regionalAlerts) && data.regionalAlerts.length
+            ? data.regionalAlerts
+          : data && Array.isArray(data.results)
           ? data.results
           : data && Array.isArray(data.parkingLeads)
             ? data.parkingLeads
             : data && Array.isArray(data.alerts)
               ? data.alerts
               : [];
-        const isAlertList = data && Array.isArray(data.alerts);
+        const isAlertList = data && (Array.isArray(data.alerts) || Array.isArray(data.regionalAlerts));
+        const isRegionalAlertList = data && Array.isArray(data.regionalAlerts) &&
+          !data.alerts?.length && data.regionalAlerts.length > 0;
         nearbyTitle.textContent = isAlertList
-          ? "Alertas reales cercanas"
+          ? isRegionalAlertList ? "Alertas reales en el area amplia" : "Alertas reales cercanas"
           : data && Array.isArray(data.parkingLeads)
             ? data.parkShareStockAvailable
               ? "Stock ParkShare y alternativas reales"
@@ -864,8 +988,44 @@ const page = `<!doctype html>
           address.textContent = reported + (place.address || place.reason || "Direccion no confirmada");
 
           card.append(title, distance, address);
+          if (place.source === "parkshare_community" && place.id) {
+            const controls = document.createElement("div");
+            controls.className = "alert-confirmation-actions";
+            const confirmButton = document.createElement("button");
+            confirmButton.type = "button";
+            confirmButton.textContent = "Sigue ahi";
+            confirmButton.addEventListener("click", () => voteCommunityAlert(place.id, "still_present"));
+            const clearButton = document.createElement("button");
+            clearButton.type = "button";
+            clearButton.className = "secondary-button";
+            clearButton.textContent = "Ya no esta";
+            clearButton.addEventListener("click", () => voteCommunityAlert(place.id, "cleared"));
+            controls.append(confirmButton, clearButton);
+            card.appendChild(controls);
+          }
           nearbyResults.appendChild(card);
         });
+      }
+
+      async function voteCommunityAlert(alertId, observation) {
+        document.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+        try {
+          const data = await fetchDemoResult("confirm_road_alert", {
+            alertId,
+            observation,
+            clientReporterId: getClientReporterId()
+          });
+          const answer = data.content && data.content[0]
+            ? data.content[0].text
+            : "Confirmacion registrada.";
+          assistantAnswer.textContent = answer;
+          addMessage("assistant", answer);
+          rawResponse.textContent = JSON.stringify(data, null, 2);
+        } catch (error) {
+          assistantAnswer.textContent = "No pude registrar la confirmacion del aviso. Intentalo otra vez.";
+        } finally {
+          document.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+        }
       }
 
       function clearRouteQuestion() {
@@ -1358,6 +1518,7 @@ const page = `<!doctype html>
         args.clientWeekday = now.getDay();
         args.clientMinutes = now.getHours() * 60 + now.getMinutes();
         args.clientTimezoneOffsetMinutes = now.getTimezoneOffset();
+        args.clientReporterId = getClientReporterId();
       }
 
       function getLocationFailureMessage(error, permissionState = null) {
@@ -1490,6 +1651,10 @@ const page = `<!doctype html>
       }
 
       function getLocationDriverText(scenario, source) {
+        if (scenario.tool === "report_road_alert") {
+          return scenario.driver;
+        }
+
         if (scenario.tool === "release_parking_spot") {
           if (source === "coordinates") {
             return "Alexa, dile a ParkShare que he dejado libre una plaza en estas coordenadas exactas.";
@@ -1535,6 +1700,7 @@ const page = `<!doctype html>
         if (scenario.tool === "release_parking_spot") return "plaza libre";
         if (scenario.tool === "find_parking_near_destination") return "aparcamiento";
         if (scenario.tool === "get_road_alerts") return "alertas de carretera";
+        if (scenario.tool === "report_road_alert") return "aviso de carretera";
         if (query.includes("gas station") || query.includes("fuel")) {
           return form === "singular" ? "la gasolinera mas cercana" : "gasolineras";
         }
@@ -1548,6 +1714,9 @@ const page = `<!doctype html>
         const target = getScenarioTarget(scenario, "plural");
         if (scenario.tool === "release_parking_spot") {
           return "Registrando la plaza libre desde esta ubicacion...";
+        }
+        if (scenario.tool === "report_road_alert") {
+          return "Publicando el aviso real desde esta ubicacion...";
         }
 
         if (source === "coordinates") {
@@ -1563,6 +1732,9 @@ const page = `<!doctype html>
         const target = getScenarioTarget(scenario, "singular");
         if (scenario.tool === "release_parking_spot") {
           return "Ubicacion confirmada. Registrare esa plaza como libre para esta sesion.";
+        }
+        if (scenario.tool === "report_road_alert") {
+          return "Ubicacion confirmada. Publicare el aviso con hora y caducidad.";
         }
 
         if (source === "coordinates") {
@@ -1743,7 +1915,11 @@ const page = `<!doctype html>
 
       function renderMap(data) {
         const origin = data && (data.originCoordinates || data.destinationCoordinates);
-        const resultList = data && Array.isArray(data.results)
+        const resultList = data && Array.isArray(data.alerts) && data.alerts.length
+          ? data.alerts
+          : data && Array.isArray(data.regionalAlerts) && data.regionalAlerts.length
+            ? data.regionalAlerts
+          : data && Array.isArray(data.results)
           ? data.results
           : data && Array.isArray(data.parkingLeads)
             ? data.parkingLeads
@@ -1759,7 +1935,7 @@ const page = `<!doctype html>
         placeMarkers.forEach((marker) => marker.remove());
         placeMarkers = [];
 
-        const isAlertMap = data && Array.isArray(data.alerts);
+        const isAlertMap = data && (Array.isArray(data.alerts) || Array.isArray(data.regionalAlerts));
         driverMarker = L.circleMarker([origin.latitude, origin.longitude], {
           radius: 8,
           color: "#0f766e",
@@ -2012,7 +2188,14 @@ function rpcError(id, code, message, data) {
   };
 }
 
-async function handleMcp(request) {
+function createToolContext(request, env) {
+  return {
+    env,
+    authenticatedUserId: request.headers.get("oai-authenticated-user-id") || null
+  };
+}
+
+async function handleMcp(request, env) {
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -2053,14 +2236,15 @@ async function handleMcp(request) {
   }
 
   if (Array.isArray(payload)) {
-    const results = await Promise.all(payload.map(dispatchRpc));
+    const context = createToolContext(request, env);
+    const results = await Promise.all(payload.map((entry) => dispatchRpc(entry, context)));
     return json(results.filter(Boolean));
   }
 
-  return json(await dispatchRpc(payload));
+  return json(await dispatchRpc(payload, createToolContext(request, env)));
 }
 
-async function handleDemo(request) {
+async function handleDemo(request, env) {
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -2095,6 +2279,7 @@ async function handleDemo(request) {
       "find_nearby_place",
       "find_parking_near_destination",
       "get_road_alerts",
+      "report_road_alert",
       "release_parking_spot"
     ].includes(tool);
 
@@ -2132,7 +2317,7 @@ async function handleDemo(request) {
       args.locationLabel = requestLocation.label;
     }
 
-    const result = await callParkShareTool(tool, args);
+    const result = await callParkShareTool(tool, args, createToolContext(request, env));
     return json({
       tool,
       content: [{ type: "text", text: result.spoken }],
@@ -2143,7 +2328,7 @@ async function handleDemo(request) {
   }
 }
 
-async function dispatchRpc(payload) {
+async function dispatchRpc(payload, context) {
   if (!payload || payload.jsonrpc !== "2.0" || typeof payload.method !== "string") {
     return rpcError(payload?.id, -32600, "Invalid Request");
   }
@@ -2171,7 +2356,7 @@ async function dispatchRpc(payload) {
           }))
         });
       case "tools/call":
-        return callTool(payload);
+        return callTool(payload, context);
       default:
         return rpcError(payload.id, -32601, `Method not found: ${payload.method}`);
     }
@@ -2180,7 +2365,7 @@ async function dispatchRpc(payload) {
   }
 }
 
-async function callTool(payload) {
+async function callTool(payload, context) {
   const name = payload.params?.name;
   const args = payload.params?.arguments || {};
 
@@ -2188,7 +2373,7 @@ async function callTool(payload) {
     return rpcError(payload.id, -32602, "Missing tool name");
   }
 
-  const result = await callParkShareTool(name, args);
+  const result = await callParkShareTool(name, args, context);
 
   return rpcResult(payload.id, {
     content: [{ type: "text", text: result.spoken }],
@@ -2196,14 +2381,18 @@ async function callTool(payload) {
   });
 }
 
-async function callParkShareTool(name, args) {
+async function callParkShareTool(name, args, context = {}) {
   switch (name) {
     case "find_nearby_place":
       return findNearbyPlace(args);
     case "find_parking_near_destination":
       return findParkingNearDestination(args);
     case "get_road_alerts":
-      return getRoadAlerts(args);
+      return getRoadAlerts(args, context);
+    case "report_road_alert":
+      return reportRoadAlert(args, context);
+    case "confirm_road_alert":
+      return confirmRoadAlert(args, context);
     case "release_parking_spot":
       return releaseParkingSpot(args);
     case "confirm_previous_spot_free":
@@ -3967,7 +4156,7 @@ function parseDatexLikeTrafficAlerts(xml, origin, source) {
     .filter(Boolean);
 }
 
-async function fetchOfficialRoadAlerts(origin, maxResults = 5) {
+async function fetchOfficialRoadAlerts(origin, maxResults = 20, radiusKm = regionalRoadAlertRadiusKm) {
   const checkedSources = [];
   const alerts = [];
 
@@ -3991,13 +4180,264 @@ async function fetchOfficialRoadAlerts(origin, maxResults = 5) {
   }
 
   const sortedAlerts = alerts
-    .filter((alert) => alert.distanceKm <= officialRoadAlertRadiusKm)
+    .filter((alert) => alert.distanceKm <= radiusKm)
     .sort((a, b) => a.distanceKm - b.distanceKm)
     .slice(0, maxResults);
 
   return {
     alerts: sortedAlerts,
-    checkedSources
+    checkedSources,
+    available: checkedSources.some((source) => source.ok)
+  };
+}
+
+function getCommunityDatabase(context) {
+  return context?.env?.DB && typeof context.env.DB.prepare === "function"
+    ? context.env.DB
+    : null;
+}
+
+function getCommunityReporterId(args, context) {
+  return String(context?.authenticatedUserId || args.clientReporterId || "anonymous-device").slice(0, 200);
+}
+
+function getAlertBoundingBox(origin, radiusKm) {
+  const latitudeDelta = radiusKm / 111.32;
+  const longitudeDivisor = Math.max(0.2, Math.cos((origin.latitude * Math.PI) / 180));
+  const longitudeDelta = radiusKm / (111.32 * longitudeDivisor);
+  return {
+    minLatitude: origin.latitude - latitudeDelta,
+    maxLatitude: origin.latitude + latitudeDelta,
+    minLongitude: origin.longitude - longitudeDelta,
+    maxLongitude: origin.longitude + longitudeDelta
+  };
+}
+
+function normalizeCommunityRoadAlert(row, origin) {
+  const typeDefinition = communityRoadAlertTypes[row.type] || {
+    label: "Aviso comunitario",
+    lifetimeMinutes: 60
+  };
+  const point = { latitude: Number(row.latitude), longitude: Number(row.longitude) };
+  const distanceKm = haversineKm(origin, point);
+  const now = Date.now();
+  return {
+    id: row.id,
+    type: row.type,
+    label: `${typeDefinition.label} en ${row.address}`,
+    name: `${typeDefinition.label} en ${row.address}`,
+    distanceKm: Number(distanceKm.toFixed(2)),
+    driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
+    reportedMinutesAgo: Math.max(0, Math.round((now - Number(row.created_at)) / 60000)),
+    expiresInMinutes: Math.max(0, Math.ceil((Number(row.expires_at) - now) / 60000)),
+    latitude: point.latitude,
+    longitude: point.longitude,
+    address: row.note ? `${row.address}. ${row.note}` : row.address,
+    confirmations: Number(row.confirmations || 1),
+    denials: Number(row.denials || 0),
+    source: "parkshare_community",
+    sourceLabel: "Comunidad ParkShare",
+    official: false
+  };
+}
+
+async function fetchCommunityRoadAlerts(origin, context, radiusKm = regionalRoadAlertRadiusKm) {
+  const db = getCommunityDatabase(context);
+  if (!db) return { alerts: [], available: false };
+
+  const bounds = getAlertBoundingBox(origin, radiusKm);
+  const now = Date.now();
+  try {
+    const result = await db.prepare(`
+      SELECT id, type, latitude, longitude, address, note, confirmations, denials,
+             created_at, expires_at
+      FROM road_alerts
+      WHERE status = 'active'
+        AND expires_at > ?
+        AND latitude BETWEEN ? AND ?
+        AND longitude BETWEEN ? AND ?
+      ORDER BY created_at DESC
+      LIMIT 100
+    `).bind(
+      now,
+      bounds.minLatitude,
+      bounds.maxLatitude,
+      bounds.minLongitude,
+      bounds.maxLongitude
+    ).all();
+
+    const rows = Array.isArray(result?.results) ? result.results : [];
+    return {
+      available: true,
+      alerts: rows
+        .map((row) => normalizeCommunityRoadAlert(row, origin))
+        .filter((alert) => alert.distanceKm <= radiusKm)
+        .sort((a, b) => a.distanceKm - b.distanceKm)
+    };
+  } catch (error) {
+    console.error("ParkShare community alert lookup failed", error);
+    return { alerts: [], available: false };
+  }
+}
+
+async function reportRoadAlert(args, context) {
+  if (!hasValidCoordinates(args.latitude, args.longitude)) {
+    return {
+      spoken: "Necesito una ubicacion GPS precisa para publicar el aviso.",
+      data: { alertRecorded: false, needsLocation: true }
+    };
+  }
+
+  const typeDefinition = communityRoadAlertTypes[args.alertType];
+  if (!typeDefinition) {
+    throw new Error("Tipo de aviso de carretera no valido.");
+  }
+
+  const db = getCommunityDatabase(context);
+  if (!db) {
+    return {
+      spoken: "El servicio comunitario de avisos no esta disponible ahora mismo. No he publicado el aviso.",
+      data: { alertRecorded: false, storageAvailable: false }
+    };
+  }
+
+  const latitude = Number(args.latitude);
+  const longitude = Number(args.longitude);
+  const now = Date.now();
+  const expiresAt = now + typeDefinition.lifetimeMinutes * 60 * 1000;
+  const address = args.locationLabel || await reverseGeocodeRoadAlert(latitude, longitude) ||
+    `coordenadas ${formatCoordinatesLabel(latitude, longitude)}`;
+  const note = String(args.note || "").trim().slice(0, 180);
+  const reporterId = getCommunityReporterId(args, context);
+  const id = crypto.randomUUID();
+
+  await db.prepare(`
+    INSERT INTO road_alerts (
+      id, type, latitude, longitude, address, note, reporter_id, status,
+      confirmations, denials, created_at, last_confirmed_at, expires_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 1, 0, ?, ?, ?)
+  `).bind(
+    id,
+    args.alertType,
+    latitude,
+    longitude,
+    address,
+    note,
+    reporterId,
+    now,
+    now,
+    expiresAt
+  ).run();
+
+  return {
+    spoken:
+      `Aviso publicado: ${typeDefinition.label} en ${address}. ` +
+      `Estara activo ${typeDefinition.lifetimeMinutes} minutos y otros usuarios podran confirmar si sigue ahi.`,
+    data: {
+      alertRecorded: true,
+      alert: {
+        id,
+        type: args.alertType,
+        name: `${typeDefinition.label} en ${address}`,
+        address,
+        note,
+        latitude,
+        longitude,
+        confirmations: 1,
+        source: "parkshare_community",
+        expiresInMinutes: typeDefinition.lifetimeMinutes
+      }
+    }
+  };
+}
+
+async function confirmRoadAlert(args, context) {
+  const db = getCommunityDatabase(context);
+  if (!db) {
+    return {
+      spoken: "El servicio comunitario de avisos no esta disponible ahora mismo.",
+      data: { confirmationRecorded: false, storageAvailable: false }
+    };
+  }
+
+  const alertId = String(args.alertId || "");
+  const observation = String(args.observation || "");
+  if (!alertId || !["still_present", "cleared"].includes(observation)) {
+    throw new Error("Confirmacion de aviso no valida.");
+  }
+
+  const reporterId = getCommunityReporterId(args, context);
+  const alert = await db.prepare(`
+    SELECT id, type, reporter_id, status, confirmations, denials, last_confirmed_at, expires_at
+    FROM road_alerts WHERE id = ? LIMIT 1
+  `).bind(alertId).first();
+  if (!alert || alert.status !== "active" || Number(alert.expires_at) <= Date.now()) {
+    return {
+      spoken: "Ese aviso ya no esta activo.",
+      data: { confirmationRecorded: false, alertActive: false }
+    };
+  }
+
+  const existingVote = await db.prepare(`
+    SELECT vote FROM road_alert_votes WHERE alert_id = ? AND user_id = ? LIMIT 1
+  `).bind(alertId, reporterId).first();
+  if (existingVote?.vote === observation) {
+    return {
+      spoken: observation === "still_present"
+        ? "Tu confirmacion ya estaba registrada: el aviso sigue activo."
+        : "Tu aviso de retirada ya estaba registrado.",
+      data: { confirmationRecorded: true, duplicate: true, alertId, observation }
+    };
+  }
+
+  const now = Date.now();
+  const typeDefinition = communityRoadAlertTypes[alert.type] || { lifetimeMinutes: 60 };
+  const confirmationDelta = observation === "still_present" ? 1 : 0;
+  const denialDelta = observation === "cleared" ? 1 : 0;
+  const previousConfirmationDelta = existingVote?.vote === "still_present" ? -1 : 0;
+  const previousDenialDelta = existingVote?.vote === "cleared" ? -1 : 0;
+  const nextConfirmations = Math.max(0, Number(alert.confirmations) + confirmationDelta + previousConfirmationDelta);
+  const nextDenials = Math.max(0, Number(alert.denials) + denialDelta + previousDenialDelta);
+  const shouldClear = observation === "cleared" &&
+    (reporterId === alert.reporter_id || (nextDenials >= 2 && nextDenials >= nextConfirmations));
+  const nextExpiry = observation === "still_present"
+    ? now + typeDefinition.lifetimeMinutes * 60 * 1000
+    : Number(alert.expires_at);
+
+  await db.batch([
+    db.prepare(`
+      INSERT INTO road_alert_votes (alert_id, user_id, vote, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(alert_id, user_id) DO UPDATE SET vote = excluded.vote, created_at = excluded.created_at
+    `).bind(alertId, reporterId, observation, now),
+    db.prepare(`
+      UPDATE road_alerts
+      SET confirmations = ?, denials = ?, last_confirmed_at = ?, expires_at = ?, status = ?
+      WHERE id = ?
+    `).bind(
+      nextConfirmations,
+      nextDenials,
+      observation === "still_present" ? now : Number(alert.last_confirmed_at || now),
+      nextExpiry,
+      shouldClear ? "cleared" : "active",
+      alertId
+    )
+  ]);
+
+  return {
+    spoken: shouldClear
+      ? "Gracias. He retirado el aviso porque ya no esta activo."
+      : observation === "still_present"
+        ? "Gracias. He confirmado que el aviso sigue activo y he renovado su caducidad."
+        : "Gracias. He registrado que el aviso puede haber desaparecido; se retirara al recibir confirmaciones suficientes.",
+    data: {
+      confirmationRecorded: true,
+      alertId,
+      observation,
+      alertActive: !shouldClear,
+      confirmations: nextConfirmations,
+      denials: nextDenials
+    }
   };
 }
 
@@ -4156,7 +4596,7 @@ async function findParkingNearDestination(args) {
   };
 }
 
-async function getRoadAlerts(args) {
+async function getRoadAlerts(args, context = {}) {
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
   const impreciseBrowserLocation = hasCoordinates && hasImpreciseBrowserLocation(args);
   const needsCurrentLocation =
@@ -4205,21 +4645,44 @@ async function getRoadAlerts(args) {
       }
     : null;
   const destination = args.destination || "zona actual";
-  const officialLookup = hasCoordinates
-    ? await fetchOfficialRoadAlerts(originCoordinates, Number(args.maxResults) || 5)
-    : { alerts: [], checkedSources: [] };
-  const alerts = officialLookup.alerts;
+  const maxResults = Math.min(Math.max(Number(args.maxResults || 5), 1), 10);
+  const [officialLookup, communityLookup] = hasCoordinates
+    ? await Promise.all([
+        fetchOfficialRoadAlerts(originCoordinates, 50, regionalRoadAlertRadiusKm),
+        fetchCommunityRoadAlerts(originCoordinates, context, regionalRoadAlertRadiusKm)
+      ])
+    : [
+        { alerts: [], checkedSources: [], available: false },
+        { alerts: [], available: false }
+      ];
+  const nearbyAlerts = [
+    ...officialLookup.alerts,
+    ...communityLookup.alerts
+  ]
+    .filter((alert) => alert.distanceKm <= communityRoadAlertRadiusKm)
+    .sort((a, b) => a.distanceKm - b.distanceKm)
+    .slice(0, maxResults);
+  const regionalAlerts = [
+    ...officialLookup.alerts,
+    ...communityLookup.alerts
+  ]
+    .filter((alert) => alert.distanceKm > communityRoadAlertRadiusKm)
+    .sort((a, b) => a.distanceKm - b.distanceKm)
+    .slice(0, maxResults);
 
-  if (alerts.length) {
-    const primary = alerts[0];
+  if (nearbyAlerts.length) {
+    const primary = nearbyAlerts[0];
     const routeAlternative =
       primary.alternateRouteDeltaMinutes > 0
         ? `Si sigues hacia esa zona, la ruta alternativa anade unos ${primary.alternateRouteDeltaMinutes} minutos.`
         : "No hace falta calcular ruta alternativa para este aviso.";
+    const communityCount = nearbyAlerts.filter((alert) => alert.source === "parkshare_community").length;
+    const officialCount = nearbyAlerts.filter((alert) => alert.official).length;
 
     return {
       spoken:
-        `Usando ${originDescription}, encontre ${alerts.length} alertas reales oficiales cerca de tu ubicacion. ` +
+        `Usando ${originDescription}, encontre ${nearbyAlerts.length} alertas reales cerca de tu ubicacion` +
+        `: ${communityCount} de usuarios ParkShare y ${officialCount} oficiales. ` +
         `${primary.label} esta a ${primary.distanceKm} kilometros. ` +
         routeAlternative,
       data: {
@@ -4229,18 +4692,56 @@ async function getRoadAlerts(args) {
         originCoordinates,
         destination,
         includeAlternativeRoute: args.includeAlternativeRoute !== false,
-        dataSource: "dgt_official",
+        dataSource: "dgt_official_and_parkshare_community",
         alertSearchRadiusKm: officialRoadAlertRadiusKm,
+        regionalAlertSearchRadiusKm: regionalRoadAlertRadiusKm,
         officialSourcesChecked: officialLookup.checkedSources,
-        alerts
+        officialSourceAvailable: officialLookup.available,
+        communitySourceAvailable: communityLookup.available,
+        alerts: nearbyAlerts,
+        regionalAlerts
       }
     };
   }
 
+  if (regionalAlerts.length) {
+    const primary = regionalAlerts[0];
+    return {
+      spoken:
+        `Usando ${originDescription}, no hay avisos reales dentro de ${officialRoadAlertRadiusKm} kilometros. ` +
+        `En el area mas amplia he encontrado ${regionalAlerts.length}; el mas cercano es ${primary.label}, ` +
+        `a ${primary.distanceKm} kilometros.`,
+      data: {
+        origin: args.origin || "current_location",
+        locationSource,
+        locationLabel,
+        originCoordinates,
+        destination,
+        includeAlternativeRoute: args.includeAlternativeRoute !== false,
+        dataSource: "dgt_official_and_parkshare_community",
+        alertSearchRadiusKm: officialRoadAlertRadiusKm,
+        regionalAlertSearchRadiusKm: regionalRoadAlertRadiusKm,
+        officialSourcesChecked: officialLookup.checkedSources,
+        officialSourceAvailable: officialLookup.available,
+        communitySourceAvailable: communityLookup.available,
+        noAlertsNearby: true,
+        alerts: [],
+        regionalAlerts
+      }
+    };
+  }
+
+  const officialMessage = officialLookup.available
+    ? "La fuente oficial DGT se consulto correctamente y no devolvio incidencias geolocalizadas en este radio."
+    : "La fuente oficial DGT no estaba disponible, asi que no puedo afirmar que no exista ninguna incidencia oficial.";
+  const communityMessage = communityLookup.available
+    ? "Tampoco hay avisos activos publicados por usuarios ParkShare en el area."
+    : "El servicio comunitario ParkShare no estaba disponible para esta consulta.";
+
   return {
     spoken:
-      `Usando ${originDescription}, no he encontrado alertas reales oficiales de carretera cerca de tu ubicacion ahora mismo. ` +
-      "No voy a inventar controles, radares ni retenciones; los avisos tipo SocialDrive apareceran cuando usuarios ParkShare los reporten o cuando una fuente oficial los publique.",
+      `Usando ${originDescription}, no he encontrado alertas reales cerca ni dentro de ${regionalRoadAlertRadiusKm} kilometros. ` +
+      `${officialMessage} ${communityMessage}`,
     data: {
       origin: args.origin || "current_location",
       locationSource,
@@ -4248,11 +4749,15 @@ async function getRoadAlerts(args) {
       originCoordinates,
       destination,
       includeAlternativeRoute: args.includeAlternativeRoute !== false,
-      dataSource: "dgt_official",
+      dataSource: "dgt_official_and_parkshare_community",
       alertSearchRadiusKm: officialRoadAlertRadiusKm,
+      regionalAlertSearchRadiusKm: regionalRoadAlertRadiusKm,
       officialSourcesChecked: officialLookup.checkedSources,
-      noOfficialAlertsNearby: true,
-      alerts: []
+      officialSourceAvailable: officialLookup.available,
+      communitySourceAvailable: communityLookup.available,
+      noAlertsNearby: true,
+      alerts: [],
+      regionalAlerts: []
     }
   };
 }
@@ -4325,17 +4830,16 @@ function confirmPreviousSpotFree(args) {
 
 export default {
   async fetch(request, env, ctx) {
-    void env;
     void ctx;
 
     const url = new URL(request.url);
 
     if (url.pathname === "/mcp") {
-      return handleMcp(request);
+      return handleMcp(request, env);
     }
 
     if (url.pathname === "/demo") {
-      return handleDemo(request);
+      return handleDemo(request, env);
     }
 
     if (url.pathname === "/" || url.pathname === "/health") {

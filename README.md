@@ -33,13 +33,17 @@ Alexa+ -> ParkShare MCP server -> ParkShare mobility tools -> parking/routes/ale
 
 The deployable Sites worker lives in `worker/index.js` and exposes `/mcp` over HTTPS after publication.
 
-The server uses real visitor-provided location, live OpenStreetMap place/parking lookups, official road-alert lookup when available, and ParkShare user-released parking spots from the active session. It does not fabricate parking stock or road alerts when live data is unavailable.
+The server uses real visitor-provided location, live OpenStreetMap place/parking lookups, official DGT road-alert lookup when available, persistent ParkShare community road alerts, and ParkShare user-released parking spots from the active session. It does not fabricate parking stock or road alerts when live data is unavailable.
+
+Community alerts store the exact reported coordinates, a reverse-geocoded road label, report time, confirmations and an automatic expiry. Drivers can report a mobile control, accident, traffic jam, road hazard or roadworks, then confirm whether an active alert is still present or has cleared.
 
 ## MCP tools
 
 - `find_nearby_place`
 - `find_parking_near_destination`
 - `get_road_alerts`
+- `report_road_alert`
+- `confirm_road_alert`
 - `release_parking_spot`
 - `confirm_previous_spot_free`
 

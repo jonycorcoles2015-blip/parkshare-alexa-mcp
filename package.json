@@ -5,7 +5,15 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build-site.mjs",
-    "validate": "node scripts/validate-artifact.mjs"
+    "validate": "node scripts/validate-artifact.mjs",
+    "db:generate": "drizzle-kit generate",
+    "test": "node scripts/test-community-alerts.mjs"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "drizzle-orm": "0.45.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.10"
+  }
 }
