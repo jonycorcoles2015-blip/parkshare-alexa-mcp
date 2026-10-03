@@ -701,6 +701,8 @@ const page = `<!doctype html>
       const results = document.querySelector("#results");
       const rawResponse = document.querySelector("#rawResponse");
       const maxUsableBrowserAccuracyMeters = ${maxUsableBrowserAccuracyMeters};
+      const browserLocationStorageKey = "parkshareDemoBrowserLocation";
+      const maxCachedBrowserLocationAgeMs = 24 * 60 * 60 * 1000;
       let map;
       let routeLayer;
       let driverMarker;
@@ -784,14 +786,20 @@ const page = `<!doctype html>
 
       function loadCachedBrowserLocation() {
         try {
-          const raw = window.sessionStorage && window.sessionStorage.getItem("parkshareDemoBrowserLocation");
+          const raw =
+            (window.localStorage && window.localStorage.getItem(browserLocationStorageKey)) ||
+            (window.sessionStorage && window.sessionStorage.getItem(browserLocationStorageKey));
           if (!raw) return null;
           const parsed = JSON.parse(raw);
           if (!parsed || typeof parsed.latitude !== "number" || typeof parsed.longitude !== "number") {
             return null;
           }
           if (!isUsableBrowserLocation(parsed)) {
-            window.sessionStorage.removeItem("parkshareDemoBrowserLocation");
+            removeCachedBrowserLocation();
+            return null;
+          }
+          if (!isFreshCachedBrowserLocation(parsed)) {
+            removeCachedBrowserLocation();
             return null;
           }
           return parsed;
@@ -800,9 +808,27 @@ const page = `<!doctype html>
         }
       }
 
+      function removeCachedBrowserLocation() {
+        try {
+          if (window.localStorage) {
+            window.localStorage.removeItem(browserLocationStorageKey);
+          }
+          if (window.sessionStorage) {
+            window.sessionStorage.removeItem(browserLocationStorageKey);
+          }
+        } catch (error) {
+          // Storage can be disabled in embedded browsers.
+        }
+      }
+
       function isUsableBrowserLocation(location) {
         const accuracy = Number(location && location.accuracyMeters);
         return Number.isFinite(accuracy) && accuracy > 0 && accuracy <= maxUsableBrowserAccuracyMeters;
+      }
+
+      function isFreshCachedBrowserLocation(location) {
+        const savedAt = Number(location && location.savedAt);
+        return Number.isFinite(savedAt) && Date.now() - savedAt <= maxCachedBrowserLocationAgeMs;
       }
 
       function makeBrowserAccuracyError(location) {
@@ -819,11 +845,14 @@ const page = `<!doctype html>
           savedAt: Date.now()
         };
         try {
+          if (window.localStorage) {
+            window.localStorage.setItem(browserLocationStorageKey, JSON.stringify(cachedBrowserLocation));
+          }
           if (window.sessionStorage) {
-            window.sessionStorage.setItem("parkshareDemoBrowserLocation", JSON.stringify(cachedBrowserLocation));
+            window.sessionStorage.setItem(browserLocationStorageKey, JSON.stringify(cachedBrowserLocation));
           }
         } catch (error) {
-          // Session storage can be disabled in embedded browsers.
+          // Storage can be disabled in embedded browsers.
         }
       }
 
@@ -866,7 +895,7 @@ const page = `<!doctype html>
         renderLocationDiagnostics();
         if (cachedBrowserLocation) {
           setLocationStatus(
-            "GPS guardado para esta sesión. Precisión aproximada: " +
+            "GPS preciso guardado para esta demo. Precisión aproximada: " +
             Math.round(cachedBrowserLocation.accuracyMeters || 0) +
             " metros."
           );
@@ -925,12 +954,12 @@ const page = `<!doctype html>
 
         locationDiagnostics.textContent = [
           "Diagnóstico GPS:",
-          "Versión visible: gps-quality-gated",
+          "Versión visible: gps-persistent-cache",
           "HTTPS/contexto seguro: " + (secureContext ? "sí" : "no"),
           "API GPS del navegador: " + (hasGeoApi ? "sí" : "no"),
           "API de permisos: " + (hasPermissionsApi ? "sí" : "no"),
           "Permiso informado: " + lastPermissionState,
-          "GPS guardado en sesión: " + cachedText,
+          "GPS preciso guardado: " + cachedText,
           "Último error: " + errorText
         ].join("\\n");
       }
@@ -963,14 +992,16 @@ const page = `<!doctype html>
           saveCachedBrowserLocation(location);
           renderLocationDiagnostics();
           setLocationStatus(
-            "GPS listo para esta sesion. Precision aproximada: " +
+            "GPS preciso guardado. Precision aproximada: " +
             Math.round(location.accuracyMeters || 0) +
             " metros."
           );
           return { location, fromCache: false };
         } catch (error) {
-          if (cachedBrowserLocation && error.code !== "GEOLOCATION_TOO_IMPRECISE") {
-            setLocationStatus("Usando la posicion GPS ya permitida en esta sesion.");
+          if (cachedBrowserLocation && isUsableBrowserLocation(cachedBrowserLocation)) {
+            lastLocationError = error;
+            renderLocationDiagnostics();
+            setLocationStatus("El navegador no ha dado un GPS preciso ahora, asi que uso el ultimo GPS preciso guardado para esta demo.");
             return { location: cachedBrowserLocation, fromCache: true };
           }
           lastLocationError = error;
@@ -1220,7 +1251,7 @@ const page = `<!doctype html>
 
       function describeLocationForSpeech(source, label) {
         if (source === "browser_geolocation") return "tu ubicacion GPS del navegador";
-        if (source === "cached_browser_geolocation") return "tu ubicacion GPS guardada en esta sesion";
+        if (source === "cached_browser_geolocation") return "tu ultimo GPS preciso guardado";
         if (source === "typed_coordinates") return "las coordenadas exactas introducidas";
         if (source === "manual_geocoded_location" || source === "manual_location_text") {
           return "la direccion escrita " + label;
@@ -1425,8 +1456,8 @@ const page = `<!doctype html>
                   ? "cached_browser_geolocation"
                   : "browser_geolocation";
                 args.locationLabel = locationResult.fromCache
-                  ? "your saved browser location from this session"
-                  : "your browser GPS location";
+                  ? "tu ultimo GPS preciso guardado"
+                  : "tu ubicacion GPS del navegador";
                 assistantAnswer.textContent = getLocationProgressMessage(scenario, "browser");
                 addMessage("assistant", getLocationAcknowledgement(scenario, "browser"));
               } catch (locationError) {
@@ -1795,7 +1826,7 @@ function describeStartLocation(source, label) {
   }
 
   if (source === "cached_browser_geolocation") {
-    return "tu ubicacion GPS guardada en esta sesion";
+    return "tu ultimo GPS preciso guardado";
   }
 
   if (source === "typed_coordinates") {
@@ -1822,15 +1853,6 @@ function categorySingularEs(category) {
   return "supermercado";
 }
 
-function categoryWithArticleEs(category) {
-  const id = typeof category === "string" ? category : category?.id;
-  if (id === "gas_station") return "la gasolinera";
-  if (id === "hotel") return "el hotel o motel";
-  if (id === "pharmacy") return "la farmacia";
-  if (id === "food") return "el sitio para comer";
-  return "el supermercado";
-}
-
 function categoryPluralEs(category) {
   const id = typeof category === "string" ? category : category?.id;
   if (id === "gas_station") return "gasolineras";
@@ -1852,7 +1874,7 @@ function formatNearbyAlternative(place) {
 
 function buildNearbyPlaceSpeech({ source, label, liveCategory, best, nearestByDistance, results }) {
   const originText = describeStartLocation(source, label);
-  const categoryText = categoryWithArticleEs(liveCategory);
+  const categoryText = categoryPluralEs(liveCategory);
   const alternatives = results
     .filter((place) => place.id !== best.id)
     .slice(0, 3)
@@ -1870,7 +1892,7 @@ function buildNearbyPlaceSpeech({ source, label, liveCategory, best, nearestByDi
       ? "La mejor opcion abierta"
       : "La mejor alternativa encontrada";
     return (
-      `Usando ${originText}, ${categoryText} mas cercana por distancia es ${nearestByDistance.name}, ` +
+      `Usando ${originText}, la opcion mas cercana por distancia para ${categoryText} es ${nearestByDistance.name}, ` +
       `a unos ${nearestByDistance.distanceKm} kilometros, pero puede no estar abierta. ` +
       `${recommendationText} es ${best.name}, a unos ${best.distanceKm} kilometros. ` +
       `El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)}.${formatAvailabilityForSpeech(best)}` +
@@ -1880,15 +1902,15 @@ function buildNearbyPlaceSpeech({ source, label, liveCategory, best, nearestByDi
 
   if (best.availability === "closed") {
     return (
-      `Usando ${originText}, encontre ${best.name}, ${categoryText} mas cercana por distancia, ` +
+      `Usando ${originText}, encontre ${best.name}, la opcion mas cercana por distancia para ${categoryText}, ` +
       `a unos ${best.distanceKm} kilometros, pero puede no estar abierta. ` +
       `Revisa una alternativa antes de desviarte.${alternativesText}`
     );
   }
 
   const categoryStatusText = best.availability === "open"
-    ? `${categoryText} mas cercana abierta`
-    : `${categoryText} mas cercana encontrada`;
+    ? `la opcion abierta mas cercana para ${categoryText}`
+    : `la opcion mas cercana encontrada para ${categoryText}`;
   return (
     `Usando ${originText}, encontre ${best.name}, ${categoryStatusText}, ` +
     `a unos ${best.distanceKm} kilometros. El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)}.` +
