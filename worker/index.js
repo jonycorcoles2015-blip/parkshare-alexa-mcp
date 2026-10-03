@@ -61,32 +61,32 @@ const demoAlerts = [
   {
     id: "mobile-control-town-entrance",
     type: "mobile_control",
-    label: "Control movil reportado en una via cercana",
+    label: "Control movil",
     severity: "medium",
     distanceKm: 3.1,
     reportedMinutesAgo: 18,
     alternateRouteDeltaMinutes: 5,
-    reason: "Aviso comunitario reciente de control movil"
+    reason: "Aviso de demostracion generado por ParkShare para ensenar el flujo de controles"
   },
   {
     id: "traffic-slow-roundabout",
     type: "traffic_jam",
-    label: "Retencion ligera cerca de una rotonda",
+    label: "Retencion ligera",
     severity: "low",
     distanceKm: 1.4,
     reportedMinutesAgo: 7,
     alternateRouteDeltaMinutes: 2,
-    reason: "Trafico lento reportado por conductores"
+    reason: "Aviso de demostracion generado por ParkShare para ensenar el flujo de retenciones"
   },
   {
     id: "fixed-speed-camera-main-road",
     type: "speed_camera",
-    label: "Radar fijo senalizado en via principal",
+    label: "Radar fijo senalizado",
     severity: "low",
     distanceKm: 2.4,
     reportedMinutesAgo: 0,
     alternateRouteDeltaMinutes: 0,
-    reason: "Aviso preventivo de radar fijo en carretera"
+    reason: "Aviso de demostracion generado por ParkShare para ensenar el flujo de radares"
   }
 ];
 
@@ -104,6 +104,7 @@ const minimumAlternativeCandidates = 12;
 const maxUsableBrowserAccuracyMeters = 250;
 const geocodingTimeoutMs = 4500;
 const nominatimSearchTimeoutMs = 3500;
+const reverseGeocodingTimeoutMs = 3000;
 const overpassTimeoutMs = 12000;
 const overpassOverallTimeoutMs = 12000;
 const routeTimeoutMs = 8000;
@@ -3574,14 +3575,68 @@ function buildParkingLeadsForOrigin(args) {
   });
 }
 
-function buildRoadAlertsForOrigin(args) {
+function formatCoordinatesLabel(latitude, longitude) {
+  return `${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`;
+}
+
+function formatReverseRoadAddress(address = {}) {
+  const street = address.road || address.pedestrian || address.square || address.footway || address.path;
+  const houseNumber = address.house_number;
+  const area = address.neighbourhood || address.suburb || address.city_district;
+  const locality = address.city || address.town || address.village || address.municipality;
+
+  return [
+    [street, houseNumber].filter(Boolean).join(", "),
+    area,
+    locality
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+async function reverseGeocodeRoadAlert(latitude, longitude) {
+  if (!hasValidCoordinates(latitude, longitude)) return null;
+
+  const params = new URLSearchParams({
+    format: "jsonv2",
+    addressdetails: "1",
+    zoom: "18",
+    lat: String(latitude),
+    lon: String(longitude)
+  });
+  const data = await fetchJsonWithTimeout(
+    `https://nominatim.openstreetmap.org/reverse?${params.toString()}`,
+    {
+      headers: {
+        "accept": "application/json",
+        "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
+      }
+    },
+    reverseGeocodingTimeoutMs
+  );
+
+  const formatted = formatReverseRoadAddress(data?.address || {});
+  if (formatted) {
+    return formatted;
+  }
+
+  return data?.display_name || null;
+}
+
+function formatRoadAlertLabel(alert, locationLabel) {
+  return `${alert.label} en ${locationLabel}`;
+}
+
+async function buildRoadAlertsForOrigin(args) {
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
   if (!hasCoordinates) {
     return demoAlerts.map((alert) => ({
       ...alert,
       name: alert.label,
       driveMinutes: Math.max(1, Math.round((alert.distanceKm / 35) * 60)),
-      address: alert.reason
+      address: alert.reason,
+      source: "parkshare_demo_simulated",
+      simulated: true
     }));
   }
 
@@ -3596,7 +3651,7 @@ function buildRoadAlertsForOrigin(args) {
     { north: 1700, east: -1700 }
   ];
 
-  return demoAlerts.map((alert, index) => {
+  const alerts = demoAlerts.map((alert, index) => {
     const offset = offsets[index] || offsets[offsets.length - 1];
     const alertLatitude = latitude + offset.north / metersPerDegreeLatitude;
     const alertLongitude = longitude + offset.east / metersPerDegreeLongitude;
@@ -3609,9 +3664,27 @@ function buildRoadAlertsForOrigin(args) {
       driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
       latitude: alertLatitude,
       longitude: alertLongitude,
-      address: alert.reason
+      address: alert.reason,
+      source: "parkshare_demo_simulated",
+      simulated: true
     };
   });
+
+  const enrichedAlerts = await Promise.all(alerts.map(async (alert) => {
+    const resolvedLocation =
+      await reverseGeocodeRoadAlert(alert.latitude, alert.longitude) ||
+      `coordenadas ${formatCoordinatesLabel(alert.latitude, alert.longitude)}`;
+    const label = formatRoadAlertLabel(alert, resolvedLocation);
+    return {
+      ...alert,
+      label,
+      name: label,
+      locationLabel: resolvedLocation,
+      address: `${alert.reason}. Ubicacion de demo: ${resolvedLocation}`
+    };
+  }));
+
+  return enrichedAlerts;
 }
 
 function findParkingNearDestination(args) {
@@ -3686,7 +3759,7 @@ function findParkingNearDestination(args) {
   };
 }
 
-function getRoadAlerts(args) {
+async function getRoadAlerts(args) {
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
   const impreciseBrowserLocation = hasCoordinates && hasImpreciseBrowserLocation(args);
   const needsCurrentLocation =
@@ -3728,7 +3801,7 @@ function getRoadAlerts(args) {
   const originDescription = hasCoordinates
     ? describeStartLocation(locationSource, locationLabel)
     : args.origin || "ubicacion actual";
-  const alerts = buildRoadAlertsForOrigin(args);
+  const alerts = await buildRoadAlertsForOrigin(args);
   const primary = alerts[0];
   const destination = args.destination || "zona actual";
   const routeAlternative =
@@ -3738,7 +3811,7 @@ function getRoadAlerts(args) {
 
   return {
     spoken:
-      `Usando ${originDescription}, encontre ${alerts.length} alertas comunitarias cerca de tu ubicacion. ` +
+      `Usando ${originDescription}, prepare ${alerts.length} avisos de demostracion cerca de tu ubicacion. ` +
       `${primary.label} esta a ${primary.distanceKm} kilometros y fue reportado hace ${primary.reportedMinutesAgo} minutos. ` +
       routeAlternative,
     data: {
@@ -3753,6 +3826,7 @@ function getRoadAlerts(args) {
         : null,
       destination,
       includeAlternativeRoute: args.includeAlternativeRoute !== false,
+      dataSource: "parkshare_demo_simulated",
       alerts
     }
   };
