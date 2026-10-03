@@ -498,7 +498,7 @@ const page = `<!doctype html>
           </div>
           <label for="manualLocation">Approximate city or address</label>
           <input id="manualLocation" type="text" placeholder="Madrid, Zaragoza, London..." autocomplete="street-address">
-          <small>Leave these empty to request browser GPS for this search. If GPS is denied or this embedded browser cannot show the permission prompt, ParkShare falls back to an approximate network/IP location when available. Exact coordinates are the most precise option.</small>
+          <small>Leave these empty to request browser GPS for this search. If GPS is denied or this embedded browser cannot show the permission prompt, ParkShare falls back to an approximate IP/network location when available. Exact coordinates are the most precise option.</small>
         </section>
 
         <section>
@@ -632,6 +632,71 @@ const page = `<!doctype html>
             { enableHighAccuracy: true, maximumAge: 60000, timeout: 12000 }
           );
         });
+      }
+
+      function isValidLocation(latitude, longitude) {
+        return Number.isFinite(latitude) &&
+          Number.isFinite(longitude) &&
+          latitude >= -90 &&
+          latitude <= 90 &&
+          longitude >= -180 &&
+          longitude <= 180;
+      }
+
+      async function fetchJsonWithTimeout(url, timeoutMs) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+          const response = await fetch(url, {
+            headers: { "accept": "application/json" },
+            signal: controller.signal
+          });
+          if (!response.ok) return null;
+          return response.json();
+        } catch (error) {
+          return null;
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+
+      async function getApproximateIpLocation() {
+        const providers = [
+          {
+            url: "https://ipapi.co/json/",
+            parse(data) {
+              const latitude = Number(data && data.latitude);
+              const longitude = Number(data && data.longitude);
+              if (!isValidLocation(latitude, longitude)) return null;
+              const label = [data.city, data.region, data.country_name || data.country]
+                .filter(Boolean)
+                .join(", ") || "approximate IP location";
+              return { latitude, longitude, label };
+            }
+          },
+          {
+            url: "https://ipwho.is/",
+            parse(data) {
+              if (data && data.success === false) return null;
+              const latitude = Number(data && data.latitude);
+              const longitude = Number(data && data.longitude);
+              if (!isValidLocation(latitude, longitude)) return null;
+              const label = [data.city, data.region, data.country]
+                .filter(Boolean)
+                .join(", ") || "approximate IP location";
+              return { latitude, longitude, label };
+            }
+          }
+        ];
+
+        for (const provider of providers) {
+          const data = await fetchJsonWithTimeout(provider.url, 6000);
+          const location = data ? provider.parse(data) : null;
+          if (location) return location;
+        }
+
+        return null;
       }
 
       function getLocationFailureMessage(error) {
@@ -972,9 +1037,6 @@ const page = `<!doctype html>
                 addMessage("assistant", getLocationAcknowledgement(scenario, "browser"));
               } catch (locationError) {
                 driverText = getLocationDriverText(scenario, "browser");
-                args.allowApproximateNetworkLocation = true;
-                args.locationSource = "missing_location";
-                args.gpsFallbackReason = getLocationFailureMessage(locationError);
                 assistantAnswer.textContent =
                   "Precise GPS was not available. Trying approximate network location...";
                 addMessage("driver", driverText);
@@ -982,6 +1044,24 @@ const page = `<!doctype html>
                   "assistant",
                   "Precise GPS was not available. I will try approximate network/IP location now."
                 );
+
+                const ipLocation = await getApproximateIpLocation();
+                if (ipLocation) {
+                  args.latitude = ipLocation.latitude;
+                  args.longitude = ipLocation.longitude;
+                  args.locationSource = "ip_approximate_location";
+                  args.locationLabel = ipLocation.label;
+                  assistantAnswer.textContent =
+                    "Using approximate IP/network location...";
+                  addMessage(
+                    "assistant",
+                    "I found an approximate IP/network location and will use it for this demo."
+                  );
+                } else {
+                  args.allowApproximateNetworkLocation = true;
+                  args.locationSource = "missing_location";
+                  args.gpsFallbackReason = getLocationFailureMessage(locationError);
+                }
               }
             }
           } else {
