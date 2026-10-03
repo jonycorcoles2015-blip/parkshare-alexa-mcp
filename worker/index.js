@@ -498,7 +498,7 @@ const page = `<!doctype html>
           </div>
           <label for="manualLocation">Approximate city or address</label>
           <input id="manualLocation" type="text" placeholder="Madrid, Zaragoza, London..." autocomplete="street-address">
-          <small>Leave these empty to request browser GPS for this search. If this embedded browser cannot show the GPS permission prompt, open the demo in Chrome/Safari or enter exact coordinates. A city or address is only an approximate fallback, never your exact location.</small>
+          <small>Leave these empty to request browser GPS for this search. If GPS is denied or this embedded browser cannot show the permission prompt, ParkShare falls back to an approximate network/IP location when available. Exact coordinates are the most precise option.</small>
         </section>
 
         <section>
@@ -971,14 +971,17 @@ const page = `<!doctype html>
                 addMessage("driver", driverText);
                 addMessage("assistant", getLocationAcknowledgement(scenario, "browser"));
               } catch (locationError) {
-                args.locationSource = "missing_location";
                 driverText = getLocationDriverText(scenario, "browser");
-                showMissingLocationResult(
-                  scenario,
-                  driverText,
-                  getLocationFailureMessage(locationError)
+                args.allowApproximateNetworkLocation = true;
+                args.locationSource = "missing_location";
+                args.gpsFallbackReason = getLocationFailureMessage(locationError);
+                assistantAnswer.textContent =
+                  "Precise GPS was not available. Trying approximate network location...";
+                addMessage("driver", driverText);
+                addMessage(
+                  "assistant",
+                  "Precise GPS was not available. I will try approximate network/IP location now."
                 );
-                return;
               }
             }
           } else {
@@ -1597,13 +1600,17 @@ async function findNearbyPlace(args) {
 
   if (isSupermarketSearch) {
     if (!hasCoordinates) {
+      const fallbackAttempted = args.allowApproximateNetworkLocation === true;
       return {
         spoken:
-          "I do not have a usable start location yet. Please allow browser location, enter exact coordinates, or type a city or address as an approximate fallback.",
+          fallbackAttempted
+            ? "I could not get precise GPS or an approximate network location. Please allow browser location, enter exact coordinates, or type a city or address as an approximate fallback."
+            : "I do not have a usable start location yet. Please allow browser location, enter exact coordinates, or type a city or address as an approximate fallback.",
         data: {
           query: args.query,
-          locationSource: args.locationSource || "missing_location",
+          locationSource: "missing_location",
           needsLocation: true,
+          networkFallbackAttempted: fallbackAttempted,
           results: []
         }
       };
@@ -1649,6 +1656,26 @@ function findParkingNearDestination(args) {
   const requireConfirmation = args.requirePreviousSpotConfirmation !== false;
   const best = demoParking[0];
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+  const needsCurrentLocation =
+    String(args.destination || "").toLowerCase().includes("current location") ||
+    String(args.destination || "").toLowerCase().includes("my location");
+  if (needsCurrentLocation && !hasCoordinates) {
+    const fallbackAttempted = args.allowApproximateNetworkLocation === true;
+    return {
+      spoken:
+        fallbackAttempted
+          ? "I could not get precise GPS or an approximate network location, so I cannot find nearby parking yet. Please allow browser location, enter exact coordinates, or type a city or address."
+          : "I need your current location before I can find nearby parking. Please allow browser location, enter exact coordinates, or type a city or address.",
+      data: {
+        destination: args.destination,
+        locationSource: "missing_location",
+        needsLocation: true,
+        networkFallbackAttempted: fallbackAttempted,
+        parkingLeads: []
+      }
+    };
+  }
+
   const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "demo_destination");
   const locationLabel = args.locationLabel || args.destination || "the selected destination";
   const targetDescription = hasCoordinates
@@ -1680,6 +1707,28 @@ function findParkingNearDestination(args) {
 function getRoadAlerts(args) {
   const primary = demoAlerts[0];
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+  const needsCurrentLocation =
+    String(args.origin || "").toLowerCase().includes("current_location") ||
+    String(args.origin || "").toLowerCase().includes("current location") ||
+    String(args.origin || "").toLowerCase().includes("my location");
+  if (needsCurrentLocation && !hasCoordinates) {
+    const fallbackAttempted = args.allowApproximateNetworkLocation === true;
+    return {
+      spoken:
+        fallbackAttempted
+          ? "I could not get precise GPS or an approximate network location, so I cannot check road alerts from your position yet. Please allow browser location, enter exact coordinates, or type a city or address."
+          : "I need your current location before I can check road alerts. Please allow browser location, enter exact coordinates, or type a city or address.",
+      data: {
+        origin: args.origin || "current_location",
+        locationSource: "missing_location",
+        needsLocation: true,
+        networkFallbackAttempted: fallbackAttempted,
+        destination: args.destination,
+        alerts: []
+      }
+    };
+  }
+
   const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "demo_origin");
   const locationLabel = args.locationLabel || args.origin || "current location";
   const originDescription = hasCoordinates
