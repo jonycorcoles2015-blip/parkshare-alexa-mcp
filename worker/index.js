@@ -31,7 +31,7 @@ const communityRoadAlertTypes = {
   mobile_control: { label: "Control movil", lifetimeMinutes: 45 },
   accident: { label: "Accidente", lifetimeMinutes: 120 },
   traffic_jam: { label: "Retencion", lifetimeMinutes: 60 },
-  road_hazard: { label: "Peligro en la via", lifetimeMinutes: 180 },
+  road_hazard: { label: "Obstaculo o peligro en la via", lifetimeMinutes: 180 },
   roadworks: { label: "Obras", lifetimeMinutes: 240 }
 };
 const groceryShopValues = ["supermarket", "convenience", "greengrocer", "general", "department_store"];
@@ -393,12 +393,12 @@ const pageScenarios = {
     ]
   },
   reportHazard: {
-    label: "Avisar peligro",
-    driver: "Alexa, dile a ParkShare que hay un peligro en la via en mi ubicacion.",
+    label: "Obstaculo o peligro",
+    driver: "Alexa, dile a ParkShare que hay un obstaculo o peligro en la via en mi ubicacion.",
     tool: "report_road_alert",
     args: { alertType: "road_hazard" },
     needsLocation: true,
-    context: "Aviso comunitario real de peligro en la via",
+    context: "Aviso comunitario real de obstaculo o peligro en la via",
     steps: [
       "Tomar la ubicacion GPS precisa",
       "Publicar el aviso con hora y direccion",
@@ -494,6 +494,32 @@ const page = `<!doctype html>
         background: #18704c;
       }
       .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .action-group {
+        min-width: 0;
+        border: 1px solid #b9d7ca;
+        border-radius: 8px;
+        background: #f2faf6;
+      }
+      .action-group summary {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 12px;
+        color: #18553b;
+        cursor: pointer;
+        font-weight: 800;
+        list-style: none;
+      }
+      .action-group summary::-webkit-details-marker { display: none; }
+      .action-group summary::after { content: "+"; font-size: 20px; line-height: 1; }
+      .action-group[open] summary::after { content: "−"; }
+      .action-submenu {
+        display: grid;
+        gap: 8px;
+        padding: 0 8px 8px;
+      }
       .fallback-location {
         display: grid;
         gap: 8px;
@@ -720,7 +746,7 @@ const page = `<!doctype html>
         </section>
 
         <section>
-          <h2>Escenarios reales</h2>
+          <h2>Acciones ParkShare</h2>
           <div class="actions" id="actions"></div>
         </section>
 
@@ -839,6 +865,7 @@ const page = `<!doctype html>
       let routeLayer;
       let driverMarker;
       let placeMarkers = [];
+      let currentNearbyData = {};
       let lastParkingPrompt = null;
       let cachedBrowserLocation = loadCachedBrowserLocation();
       let initialLocationRequestStarted = false;
@@ -924,6 +951,7 @@ const page = `<!doctype html>
       }
 
       function renderNearbyResults(data) {
+        currentNearbyData = data || {};
         nearbyResults.replaceChildren();
         const places = data && Array.isArray(data.alerts) && data.alerts.length
           ? data.alerts
@@ -1020,6 +1048,19 @@ const page = `<!doctype html>
             : "Confirmacion registrada.";
           assistantAnswer.textContent = answer;
           addMessage("assistant", answer);
+          const voteResult = data.structuredContent || data;
+          if (observation === "cleared" && voteResult.confirmationRecorded === true) {
+            const withoutAlert = (items) => Array.isArray(items)
+              ? items.filter((item) => item && item.id !== alertId)
+              : items;
+            const updatedNearbyData = {
+              ...currentNearbyData,
+              alerts: withoutAlert(currentNearbyData.alerts),
+              regionalAlerts: withoutAlert(currentNearbyData.regionalAlerts)
+            };
+            renderNearbyResults(updatedNearbyData);
+            renderMap(updatedNearbyData);
+          }
           rawResponse.textContent = JSON.stringify(data, null, 2);
         } catch (error) {
           assistantAnswer.textContent = "No pude registrar la confirmacion del aviso. Intentalo otra vez.";
@@ -1927,13 +1968,16 @@ const page = `<!doctype html>
               ? data.alerts
               : [];
         const destination = resultList[0];
+        if (routeLayer) {
+          routeLayer.remove();
+          routeLayer = null;
+        }
+        placeMarkers.forEach((marker) => marker.remove());
+        placeMarkers = [];
         if (!origin || !destination || !destination.latitude || !destination.longitude) return;
         if (!ensureMap(origin.latitude, origin.longitude)) return;
 
-        if (routeLayer) routeLayer.remove();
         if (driverMarker) driverMarker.remove();
-        placeMarkers.forEach((marker) => marker.remove());
-        placeMarkers = [];
 
         const isAlertMap = data && (Array.isArray(data.alerts) || Array.isArray(data.regionalAlerts));
         driverMarker = L.circleMarker([origin.latitude, origin.longitude], {
@@ -2127,13 +2171,32 @@ const page = `<!doctype html>
         }
       }
 
-      Object.entries(scenarios).forEach(([key, scenario]) => {
+      function appendScenarioButton(container, key) {
+        const scenario = scenarios[key];
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = scenario.label;
         button.addEventListener("click", () => callScenario(key));
-        actions.appendChild(button);
-      });
+        container.appendChild(button);
+      }
+
+      function appendScenarioGroup(label, keys) {
+        const group = document.createElement("details");
+        group.className = "action-group";
+        const summary = document.createElement("summary");
+        summary.textContent = label;
+        const submenu = document.createElement("div");
+        submenu.className = "action-submenu";
+        keys.forEach((key) => appendScenarioButton(submenu, key));
+        group.append(summary, submenu);
+        actions.appendChild(group);
+      }
+
+      appendScenarioGroup("Buscar un sitio cercano", ["supermarket", "fuel", "hotel"]);
+      appendScenarioButton(actions, "parking");
+      appendScenarioButton(actions, "alerts");
+      appendScenarioGroup("Crear aviso", ["reportControl", "reportAccident", "reportTraffic", "reportHazard"]);
+      appendScenarioButton(actions, "release");
 
       startLocationPermission.addEventListener("click", requestEntryLocationPermission);
       confirmSpotFree.addEventListener("click", () => answerPreviousSpotQuestion("yes"));
