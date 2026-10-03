@@ -703,6 +703,9 @@ const page = `<!doctype html>
       const maxUsableBrowserAccuracyMeters = ${maxUsableBrowserAccuracyMeters};
       const browserLocationStorageKey = "parkshareDemoBrowserLocation";
       const maxCachedBrowserLocationAgeMs = 24 * 60 * 60 * 1000;
+      const browserLocationAttemptCount = 4;
+      const browserLocationAttemptTimeoutMs = 6000;
+      const browserLocationRetryDelayMs = 800;
       let map;
       let routeLayer;
       let driverMarker;
@@ -757,7 +760,7 @@ const page = `<!doctype html>
         });
       }
 
-      function getBrowserLocation() {
+      function getBrowserLocationOnce() {
         return new Promise((resolve, reject) => {
           if (typeof navigator === "undefined" || !navigator.geolocation) {
             const error = new Error("This browser does not expose GPS location.");
@@ -779,8 +782,58 @@ const page = `<!doctype html>
               wrapped.code = error && error.code;
               reject(wrapped);
             },
-            { enableHighAccuracy: true, maximumAge: 60000, timeout: 12000 }
+            { enableHighAccuracy: true, maximumAge: 0, timeout: browserLocationAttemptTimeoutMs }
           );
+        });
+      }
+
+      function sleepForBrowserLocationRetry() {
+        return new Promise((resolve) => window.setTimeout(resolve, browserLocationRetryDelayMs));
+      }
+
+      function isBetterBrowserLocation(candidate, currentBest) {
+        if (!candidate) return false;
+        if (!currentBest) return true;
+        const candidateAccuracy = Number(candidate.accuracyMeters);
+        const bestAccuracy = Number(currentBest.accuracyMeters);
+        if (!Number.isFinite(candidateAccuracy)) return false;
+        if (!Number.isFinite(bestAccuracy)) return true;
+        return candidateAccuracy < bestAccuracy;
+      }
+
+      async function getBrowserLocation(onAttempt) {
+        let bestLocation = null;
+        let lastError = null;
+
+        for (let attempt = 1; attempt <= browserLocationAttemptCount; attempt += 1) {
+          if (onAttempt) {
+            onAttempt({ attempt, total: browserLocationAttemptCount, bestLocation });
+          }
+
+          try {
+            const location = await getBrowserLocationOnce();
+            if (isBetterBrowserLocation(location, bestLocation)) {
+              bestLocation = location;
+            }
+            if (isUsableBrowserLocation(location)) {
+              return location;
+            }
+            lastError = makeBrowserAccuracyError(location);
+          } catch (error) {
+            lastError = error;
+          }
+
+          if (attempt < browserLocationAttemptCount) {
+            await sleepForBrowserLocationRetry();
+          }
+        }
+
+        if (bestLocation) {
+          return bestLocation;
+        }
+
+        throw lastError || Object.assign(new Error("Browser GPS was not available."), {
+          code: "GEOLOCATION_UNSUPPORTED"
         });
       }
 
@@ -973,7 +1026,7 @@ const page = `<!doctype html>
 
         locationDiagnostics.textContent = [
           "Diagnóstico GPS:",
-          "Versión visible: gps-persistent-cache",
+          "Versión visible: gps-retry-persistent-cache",
           "HTTPS/contexto seguro: " + (secureContext ? "sí" : "no"),
           "API GPS del navegador: " + (hasGeoApi ? "sí" : "no"),
           "API de permisos: " + (hasPermissionsApi ? "sí" : "no"),
@@ -1003,7 +1056,14 @@ const page = `<!doctype html>
       async function requestBrowserLocationForSearch() {
         try {
           setLocationStatus(getLocationPermissionPromptMessage());
-          const location = await getBrowserLocation();
+          const location = await getBrowserLocation(({ attempt, total, bestLocation }) => {
+            const bestText = bestLocation
+              ? " Mejor lectura hasta ahora: " + Math.round(bestLocation.accuracyMeters || 0) + " m."
+              : "";
+            setLocationStatus(
+              "Buscando GPS preciso... intento " + attempt + " de " + total + "." + bestText
+            );
+          });
           if (!isUsableBrowserLocation(location)) {
             throw makeBrowserAccuracyError(location);
           }
@@ -1086,7 +1146,7 @@ const page = `<!doctype html>
         if (error && error.code === "GEOLOCATION_TOO_IMPRECISE") {
           const accuracy = Number(error.accuracyMeters);
           const accuracyText = Number.isFinite(accuracy) ? Math.round(accuracy) + " m" : "demasiado baja";
-          return "El navegador ha dado una ubicación demasiado aproximada (" + accuracyText + "). No la uso para buscar sitios cercanos porque puede mandarte a otro barrio o al centro de la ciudad. Escribe una dirección exacta o coordenadas.";
+          return "He intentado obtener un GPS preciso varias veces, pero el navegador solo ha dado una ubicación demasiado aproximada (" + accuracyText + "). No la uso para buscar sitios cercanos porque puede mandarte a otro barrio o al centro de la ciudad. Escribe una dirección exacta o coordenadas.";
         }
 
         if (error && error.code === 1) {
