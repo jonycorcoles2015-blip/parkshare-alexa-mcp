@@ -1373,8 +1373,8 @@ const page = `<!doctype html>
         const scenario = scenarios[key];
         document.querySelectorAll("button").forEach((button) => { button.disabled = true; });
         assistantAnswer.textContent = scenario.needsLocation
-          ? "Requesting browser location..."
-          : "Calling ParkShare MCP demo...";
+          ? "Solicitando ubicacion del navegador..."
+          : "Llamando a la demo MCP de ParkShare...";
         contextTitle.textContent = scenario.context;
         renderSteps(scenario.steps);
 
@@ -1399,10 +1399,10 @@ const page = `<!doctype html>
               args.locationText = manualText;
               args.locationSource = "manual_location_text";
               args.locationLabel = manualText;
-              if (cachedBrowserLocation && isUsableBrowserLocation(cachedBrowserLocation) && !textHasLocalityContext(manualText)) {
+              if (cachedBrowserLocation && isUsableBrowserLocation(cachedBrowserLocation)) {
                 args.geocodeBiasLatitude = cachedBrowserLocation.latitude;
                 args.geocodeBiasLongitude = cachedBrowserLocation.longitude;
-                args.geocodeBiasRadiusMeters = 50000;
+                args.geocodeBiasRadiusMeters = textHasLocalityContext(manualText) ? 8000 : 50000;
               }
               driverText = getLocationDriverText(scenario, "typed");
               assistantAnswer.textContent = getLocationProgressMessage(scenario, "typed");
@@ -1879,6 +1879,7 @@ function buildGeocodeQueries(text) {
     ...buildImplicitSpanishStreetQueryVariants(cleaned),
     cleaned
   ];
+  const expandedBaseVariants = baseVariants.flatMap(expandSpanishStreetArticleVariants);
   const variants = [];
   const mentionsCountry =
     lower.includes(" españa") ||
@@ -1887,7 +1888,7 @@ function buildGeocodeQueries(text) {
     lower.includes(",spain") ||
     lower.endsWith(" es");
 
-  for (const variant of baseVariants) {
+  for (const variant of expandedBaseVariants) {
     if (!variant) continue;
     variants.push(variant);
     if (!mentionsCountry) {
@@ -1897,6 +1898,22 @@ function buildGeocodeQueries(text) {
   }
 
   return [...new Set(variants.filter(Boolean))];
+}
+
+function expandSpanishStreetArticleVariants(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return [];
+
+  const variants = [raw];
+  const deVariant = raw
+    .replace(/\bdel\s+/gi, "de ")
+    .replace(/\bde la\s+/gi, "de ");
+
+  if (deVariant !== raw) {
+    variants.push(deVariant);
+  }
+
+  return [...new Set(variants)];
 }
 
 function buildSpanishStreetQueryVariants(text) {
@@ -1944,6 +1961,51 @@ function splitImplicitStreetHouseNumber(text) {
   };
 }
 
+function getGeocodeHints(query, biasHint = null) {
+  const textLocalityHint = getLocalityHint(query);
+  const normalizedBiasHint = normalizeGeocodeBiasHint(biasHint);
+  const biasMatchesTextLocality =
+    normalizedBiasHint &&
+    (!textLocalityHint || coordinatesMatchLocality(
+      normalizedBiasHint.latitude,
+      normalizedBiasHint.longitude,
+      textLocalityHint
+    ));
+  const preciseBiasHint = biasMatchesTextLocality
+    ? {
+        ...normalizedBiasHint,
+        radiusMeters: textLocalityHint
+          ? Math.min(normalizedBiasHint.radiusMeters, 8000)
+          : normalizedBiasHint.radiusMeters,
+        requireLocalityName: false,
+        countryCodes: textLocalityHint?.countryCodes || normalizedBiasHint.countryCodes
+      }
+    : null;
+  const fallbackHint = textLocalityHint || normalizedBiasHint;
+
+  return {
+    countryHint: textLocalityHint || normalizedBiasHint,
+    localityConstraint: textLocalityHint || preciseBiasHint || normalizedBiasHint,
+    searchHint: preciseBiasHint || fallbackHint,
+    rankingHint: preciseBiasHint || fallbackHint
+  };
+}
+
+function normalizeGeocodeBiasHint(biasHint) {
+  if (!biasHint || !hasValidCoordinates(biasHint.latitude, biasHint.longitude)) {
+    return null;
+  }
+
+  const radius = Number(biasHint.radiusMeters || 50000);
+  return {
+    ...biasHint,
+    latitude: Number(biasHint.latitude),
+    longitude: Number(biasHint.longitude),
+    radiusMeters: Number.isFinite(radius) ? Math.min(Math.max(radius, 1000), 100000) : 50000,
+    requireLocalityName: false
+  };
+}
+
 function needsLocationContextForTypedAddress(text, biasHint = null) {
   const normalized = normalizeSearchText(text);
   if (!normalized) return true;
@@ -1982,12 +2044,12 @@ function normalizeHouseNumber(value) {
 }
 
 async function geocodeWithNominatim(query, biasHint = null) {
-  const localityHint = getLocalityHint(query) || biasHint;
-  const countryConstraint = getCountryConstraint(query, localityHint);
-  const viewbox = localityHint ? viewboxForRadius(localityHint, localityHint.radiusMeters) : null;
+  const hints = getGeocodeHints(query, biasHint);
+  const countryConstraint = getCountryConstraint(query, hints.countryHint);
+  const viewbox = hints.searchHint ? viewboxForRadius(hints.searchHint, hints.searchHint.radiusMeters) : null;
   const url =
     `https://nominatim.openstreetmap.org/search?` +
-    `format=jsonv2&addressdetails=1&limit=8` +
+    `format=jsonv2&addressdetails=1&limit=20` +
     (countryConstraint ? `&countrycodes=${countryConstraint.codes.join(",")}` : "") +
     (viewbox ? `&viewbox=${viewbox}&bounded=1` : "") +
     `&q=${encodeURIComponent(query)}`;
@@ -2006,11 +2068,11 @@ async function geocodeWithNominatim(query, biasHint = null) {
     .filter((result) =>
       hasValidCoordinates(result.lat, result.lon) &&
       resultMatchesCountry(result, countryConstraint) &&
-      resultMatchesLocality(result, localityHint) &&
+      resultMatchesLocality(result, hints.localityConstraint) &&
       resultMatchesAddressPrecision(result, query) &&
       resultMatchesTypedAddressText(result, query)
     )
-    .sort((a, b) => scoreGeocodeResult(b, localityHint) - scoreGeocodeResult(a, localityHint))[0];
+    .sort((a, b) => scoreGeocodeResult(b, hints.rankingHint) - scoreGeocodeResult(a, hints.rankingHint))[0];
 
   if (!best || !hasValidCoordinates(best.lat, best.lon)) {
     return null;
@@ -2031,12 +2093,12 @@ async function geocodeWithPhoton(query, biasHint = null) {
     return null;
   }
 
-  const localityHint = getLocalityHint(query) || biasHint;
-  const countryConstraint = getCountryConstraint(query, localityHint);
+  const hints = getGeocodeHints(query, biasHint);
+  const countryConstraint = getCountryConstraint(query, hints.countryHint);
   const url =
     `https://photon.komoot.io/api/?` +
     `limit=5` +
-    (localityHint ? `&lat=${localityHint.latitude}&lon=${localityHint.longitude}` : "") +
+    (hints.rankingHint ? `&lat=${hints.rankingHint.latitude}&lon=${hints.rankingHint.longitude}` : "") +
     `&q=${encodeURIComponent(query)}`;
   const data = await fetchJsonWithTimeout(url, {
     headers: {
@@ -2054,7 +2116,7 @@ async function geocodeWithPhoton(query, biasHint = null) {
       const properties = feature.properties || {};
       if (
         !photonResultMatchesCountry(properties, countryConstraint) ||
-        !photonResultMatchesLocality(properties, latitude, longitude, localityHint)
+        !photonResultMatchesLocality(properties, latitude, longitude, hints.localityConstraint)
       ) {
         return null;
       }
@@ -2071,7 +2133,7 @@ async function geocodeWithPhoton(query, biasHint = null) {
         longitude,
         label: label || query,
         geocoder: "photon",
-        score: scoreGeocodeResult({ lat: latitude, lon: longitude, importance: 0.5 }, localityHint),
+        score: scoreGeocodeResult({ lat: latitude, lon: longitude, importance: 0.5 }, hints.rankingHint),
         properties
       };
     })
@@ -2307,18 +2369,26 @@ function photonResultMatchesCountry(properties, countryConstraint) {
 
 function resultMatchesLocality(result, localityHint) {
   if (!localityHint) return true;
-  if (localityHint.requireLocalityName && !addressMatchesLocalityName(result.address || {}, localityHint)) {
+  const matchesCoordinates = coordinatesMatchLocality(Number(result.lat), Number(result.lon), localityHint);
+  if (!matchesCoordinates) {
     return false;
   }
-  return coordinatesMatchLocality(Number(result.lat), Number(result.lon), localityHint);
+  if (localityHint.requireLocalityName && !addressMatchesLocalityName(result.address || {}, localityHint)) {
+    return matchesCoordinates;
+  }
+  return true;
 }
 
 function photonResultMatchesLocality(properties, latitude, longitude, localityHint) {
   if (!localityHint) return true;
-  if (localityHint.requireLocalityName && !propertiesMatchLocalityName(properties || {}, localityHint)) {
+  const matchesCoordinates = coordinatesMatchLocality(latitude, longitude, localityHint);
+  if (!matchesCoordinates) {
     return false;
   }
-  return coordinatesMatchLocality(latitude, longitude, localityHint);
+  if (localityHint.requireLocalityName && !propertiesMatchLocalityName(properties || {}, localityHint)) {
+    return matchesCoordinates;
+  }
+  return true;
 }
 
 function addressMatchesLocalityName(address, localityHint) {
