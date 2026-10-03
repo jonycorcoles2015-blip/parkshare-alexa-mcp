@@ -1963,8 +1963,12 @@ function formatNearbyAlternative(place) {
 function buildNearbyPlaceSpeech({ source, label, liveCategory, best, nearestByDistance, results }) {
   const originText = describeStartLocation(source, label);
   const categoryText = categoryPluralEs(liveCategory);
+  const nearestClosedMentioned =
+    nearestByDistance &&
+    nearestByDistance.id !== best.id &&
+    nearestByDistance.availability === "closed";
   const alternatives = results
-    .filter((place) => place.id !== best.id)
+    .filter((place) => place.id !== best.id && (!nearestClosedMentioned || place.id !== nearestByDistance.id))
     .slice(0, 3)
     .map(formatNearbyAlternative);
   const alternativesText = alternatives.length
@@ -1981,7 +1985,7 @@ function buildNearbyPlaceSpeech({ source, label, liveCategory, best, nearestByDi
       : "La mejor alternativa encontrada";
     return (
       `Usando ${originText}, la opcion mas cercana por distancia para ${categoryText} es ${nearestByDistance.name}, ` +
-      `a unos ${nearestByDistance.distanceKm} kilometros, pero puede no estar abierta. ` +
+      `a unos ${nearestByDistance.distanceKm} kilometros, pero puede estar cerrada ahora. ` +
       `${recommendationText} es ${best.name}, a unos ${best.distanceKm} kilometros. ` +
       `El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)}.${formatAvailabilityForSpeech(best)}` +
       alternativesText
@@ -1998,7 +2002,7 @@ function buildNearbyPlaceSpeech({ source, label, liveCategory, best, nearestByDi
 
   const categoryStatusText = best.availability === "open"
     ? `la opcion abierta mas cercana para ${categoryText}`
-    : `la opcion mas cercana encontrada para ${categoryText}`;
+    : `la opcion mas cercana por distancia para ${categoryText}`;
   return (
     `Usando ${originText}, encontre ${best.name}, ${categoryStatusText}, ` +
     `a unos ${best.distanceKm} kilometros. El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)}.` +
@@ -3025,16 +3029,26 @@ async function rankSupermarketsByPracticalRoute(origin, places, maxResults, cont
       a.rankingMinutes - b.rankingMinutes ||
       a.name.localeCompare(b.name)
     )[0] || null;
-  const sorted = allRanked
+
+  const byPracticalDistance = [...allRanked]
     .sort((a, b) =>
-      a.rankingAvailability - b.rankingAvailability ||
       a.rankingDistanceKm - b.rankingDistanceKm ||
       a.rankingMinutes - b.rankingMinutes ||
       a.name.localeCompare(b.name)
     );
 
-  const bestRoute = sorted[0]?.route || null;
-  const results = sorted.slice(0, maxResults).map(({
+  const nearestOpenByDistance = byPracticalDistance.find((place) => place.availability === "open") || null;
+  const recommended = nearestByDistance?.availability === "closed" && nearestOpenByDistance
+    ? nearestOpenByDistance
+    : nearestByDistance || byPracticalDistance[0] || null;
+
+  const ordered = [
+    ...(recommended ? [recommended] : []),
+    ...byPracticalDistance.filter((place) => place.id !== recommended?.id)
+  ];
+
+  const bestRoute = recommended?.route || null;
+  const results = ordered.slice(0, maxResults).map(({
     route,
     rankingAvailability,
     rankingDistanceKm,
