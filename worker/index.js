@@ -248,7 +248,7 @@ const pageScenarios = {
     steps: [
       "Use browser, approximate or typed driver location",
       "Search OpenStreetMap supermarkets around that point",
-      "Rank results by practical driving distance",
+      "Rank results by closest mapped place",
       "Draw a route to the closest supermarket when routing is available"
     ]
   },
@@ -947,7 +947,7 @@ const page = `<!doctype html>
         if (!route) return;
 
         structured.route = route;
-        destination.distanceKm = route.distanceKm;
+        destination.driveDistanceKm = route.distanceKm;
         destination.driveMinutes = route.durationMinutes;
 
         if (data.content && data.content[0]) {
@@ -957,7 +957,7 @@ const page = `<!doctype html>
           );
           data.content[0].text =
             "Using " + label + ", I found " + destination.name + ", about " +
-            route.distanceKm + " kilometers away. The drive is around " +
+            destination.distanceKm + " kilometers away. The drive is around " +
             formatMinutes(route.durationMinutes) + ".";
         }
       }
