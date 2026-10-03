@@ -85,7 +85,9 @@ const fallbackLocation = {
   source: "demo_montblanc_fallback"
 };
 
-const supermarketSearchRadiiMeters = [5000, 15000, 50000, 100000];
+const supermarketSearchRadiiMeters = [2500, 5000, 15000, 50000, 100000];
+const supermarketCandidateLimit = 20;
+const routedCandidateLimit = 6;
 const geocodingTimeoutMs = 4500;
 const nominatimSearchTimeoutMs = 3500;
 const overpassTimeoutMs = 12000;
@@ -95,6 +97,7 @@ const overpassEndpoints = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter"
 ];
+const groceryShopValues = ["supermarket", "convenience", "greengrocer", "general"];
 
 const toolDefinitions = [
   {
@@ -372,6 +375,22 @@ const page = `<!doctype html>
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
       }
+      .location-controls {
+        display: grid;
+        gap: 8px;
+        margin-top: 4px;
+      }
+      .secondary-button {
+        background: #e7f3ed;
+        color: #18704c;
+        border: 1px solid #b9d7ca;
+      }
+      .location-status {
+        min-height: 20px;
+        color: #5d6963;
+        font-size: 13px;
+        line-height: 1.35;
+      }
       .fallback-location label {
         color: #5d6963;
         font-size: 13px;
@@ -498,7 +517,11 @@ const page = `<!doctype html>
           </div>
           <label for="manualLocation">Approximate city or address</label>
           <input id="manualLocation" type="text" placeholder="Madrid, Zaragoza, London..." autocomplete="street-address">
-          <small>Leave these empty to request browser GPS for this search. IP/network location is not used for nearest-place results because it can be kilometers away. If GPS is unavailable, enter exact coordinates or a full address with city and country.</small>
+          <div class="location-controls">
+            <button class="secondary-button" id="useBrowserLocation" type="button">Use my browser location</button>
+            <div class="location-status" id="locationStatus">GPS is requested for every "near me" search unless exact coordinates or a typed address are provided.</div>
+          </div>
+          <small>Leave these empty to request browser GPS for this search. IP/network location is not used for nearest-place results because it can be kilometers away. If GPS is denied, enter exact coordinates or a full address with city and country.</small>
         </section>
 
         <section>
@@ -554,6 +577,8 @@ const page = `<!doctype html>
       const manualLocation = document.querySelector("#manualLocation");
       const manualLatitude = document.querySelector("#manualLatitude");
       const manualLongitude = document.querySelector("#manualLongitude");
+      const useBrowserLocation = document.querySelector("#useBrowserLocation");
+      const locationStatus = document.querySelector("#locationStatus");
       const steps = document.querySelector("#steps");
       const results = document.querySelector("#results");
       const rawResponse = document.querySelector("#rawResponse");
@@ -561,6 +586,7 @@ const page = `<!doctype html>
       let routeLayer;
       let driverMarker;
       let placeMarker;
+      let cachedBrowserLocation = null;
 
       function addMessage(className, text) {
         const node = document.createElement("div");
@@ -634,13 +660,41 @@ const page = `<!doctype html>
         });
       }
 
+      function setLocationStatus(text) {
+        locationStatus.textContent = text;
+      }
+
+      async function requestBrowserLocationForSearch() {
+        try {
+          setLocationStatus("Requesting precise browser GPS...");
+          const location = await getBrowserLocation();
+          cachedBrowserLocation = {
+            ...location,
+            savedAt: Date.now()
+          };
+          setLocationStatus(
+            "GPS ready for this session. Accuracy: about " +
+            Math.round(location.accuracyMeters || 0) +
+            " meters."
+          );
+          return { location, fromCache: false };
+        } catch (error) {
+          if (cachedBrowserLocation) {
+            setLocationStatus("Using the GPS position already allowed in this session.");
+            return { location: cachedBrowserLocation, fromCache: true };
+          }
+          setLocationStatus(getLocationFailureMessage(error));
+          throw error;
+        }
+      }
+
       function getLocationFailureMessage(error) {
         if (error && error.code === "GEOLOCATION_UNSUPPORTED") {
           return "This embedded browser cannot open the GPS permission prompt. Open the demo in Chrome/Safari, or enter exact coordinates or a full address before searching.";
         }
 
         if (error && error.code === 1) {
-          return "Location permission was denied. Allow browser location for this site, or enter exact coordinates or a full address before searching.";
+          return "Location permission was denied. Type the address where you are, or enter exact coordinates, so ParkShare can search near you.";
         }
 
         if (error && error.code === 2) {
@@ -651,7 +705,7 @@ const page = `<!doctype html>
           return "The GPS request timed out. Try again, open the demo in Chrome/Safari, or enter exact coordinates or a full address.";
         }
 
-        return "Browser GPS was not available. Open the demo in Chrome/Safari, or enter exact coordinates or a full address before searching.";
+        return "Browser GPS was not available. Open the demo in Chrome/Safari, or enter exact coordinates or a full address before searching. IP/network location is not used because it can be wrong by kilometers.";
       }
 
       function showMissingLocationResult(scenario, driverText, message) {
@@ -811,6 +865,7 @@ const page = `<!doctype html>
 
       function describeLocationForSpeech(source, label) {
         if (source === "browser_geolocation") return "your precise browser location";
+        if (source === "cached_browser_geolocation") return "your saved browser location from this session";
         if (source === "typed_coordinates") return "the exact coordinates you entered";
         if (source === "manual_geocoded_location" || source === "manual_location_text") {
           return "the approximate typed place " + label;
@@ -819,6 +874,24 @@ const page = `<!doctype html>
           return "your approximate network location";
         }
         return label || "the selected location";
+      }
+
+      function textHasLocalityContext(text) {
+        const lower = text.toLowerCase();
+        return [
+          "zaragoza",
+          "madrid",
+          "barcelona",
+          "valencia",
+          "malaga",
+          "málaga",
+          "sevilla",
+          "santander",
+          "montblanc",
+          "españa",
+          "spain",
+          "colombia"
+        ].some((token) => lower.includes(token));
       }
 
       async function fetchBrowserRoute(origin, destination) {
@@ -954,18 +1027,28 @@ const page = `<!doctype html>
               args.locationText = manualText;
               args.locationSource = "manual_location_text";
               args.locationLabel = manualText;
+              if (cachedBrowserLocation && !textHasLocalityContext(manualText)) {
+                args.geocodeBiasLatitude = cachedBrowserLocation.latitude;
+                args.geocodeBiasLongitude = cachedBrowserLocation.longitude;
+                args.geocodeBiasRadiusMeters = 50000;
+              }
               driverText = getLocationDriverText(scenario, "typed");
               assistantAnswer.textContent = getLocationProgressMessage(scenario, "typed");
               addMessage("driver", driverText);
               addMessage("assistant", getLocationAcknowledgement(scenario, "typed"));
             } else {
               try {
-                const location = await getBrowserLocation();
+                const locationResult = await requestBrowserLocationForSearch();
+                const location = locationResult.location;
                 args.latitude = location.latitude;
                 args.longitude = location.longitude;
                 args.accuracyMeters = location.accuracyMeters;
-                args.locationSource = "browser_geolocation";
-                args.locationLabel = "your precise browser location";
+                args.locationSource = locationResult.fromCache
+                  ? "cached_browser_geolocation"
+                  : "browser_geolocation";
+                args.locationLabel = locationResult.fromCache
+                  ? "your saved browser location from this session"
+                  : "your precise browser location";
                 driverText = getLocationDriverText(scenario, "browser");
                 assistantAnswer.textContent = getLocationProgressMessage(scenario, "browser");
                 addMessage("driver", driverText);
@@ -1015,6 +1098,20 @@ const page = `<!doctype html>
         button.textContent = scenario.label;
         button.addEventListener("click", () => callScenario(key));
         actions.appendChild(button);
+      });
+
+      useBrowserLocation.addEventListener("click", async () => {
+        useBrowserLocation.disabled = true;
+        try {
+          await requestBrowserLocationForSearch();
+          manualLatitude.value = "";
+          manualLongitude.value = "";
+          manualLocation.value = "";
+        } catch (error) {
+          setLocationStatus(getLocationFailureMessage(error));
+        } finally {
+          useBrowserLocation.disabled = false;
+        }
       });
 
       renderSteps(["Choose a demo scenario", "The page will call POST /demo", "MCP clients keep using POST /mcp"]);
@@ -1140,7 +1237,7 @@ async function handleDemo(request) {
       typeof args.locationText === "string" &&
       args.locationText.trim()
     ) {
-      const geocoded = await geocodeLocationText(args.locationText.trim());
+      const geocoded = await geocodeLocationText(args.locationText.trim(), getGeocodeBiasFromArgs(args));
       if (geocoded) {
         args.latitude = geocoded.latitude;
         args.longitude = geocoded.longitude;
@@ -1255,6 +1352,19 @@ function hasValidCoordinates(latitude, longitude) {
   return Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 }
 
+function getGeocodeBiasFromArgs(args) {
+  if (!hasValidCoordinates(args.geocodeBiasLatitude, args.geocodeBiasLongitude)) {
+    return null;
+  }
+
+  const radius = Number(args.geocodeBiasRadiusMeters || 50000);
+  return {
+    latitude: Number(args.geocodeBiasLatitude),
+    longitude: Number(args.geocodeBiasLongitude),
+    radiusMeters: Number.isFinite(radius) ? Math.min(Math.max(radius, 5000), 100000) : 50000
+  };
+}
+
 function formatMinutes(minutes) {
   return Number(minutes) === 1 ? "1 minute" : `${minutes} minutes`;
 }
@@ -1262,6 +1372,10 @@ function formatMinutes(minutes) {
 function describeStartLocation(source, label) {
   if (source === "browser_geolocation") {
     return "your precise browser location";
+  }
+
+  if (source === "cached_browser_geolocation") {
+    return "your saved browser location from this session";
   }
 
   if (source === "typed_coordinates") {
@@ -1301,16 +1415,16 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
   }
 }
 
-async function geocodeLocationText(text) {
+async function geocodeLocationText(text, biasHint = null) {
   const queries = buildGeocodeQueries(text);
 
   for (const query of queries) {
-    const nominatim = await geocodeWithNominatim(query);
+    const nominatim = await geocodeWithNominatim(query, biasHint);
     if (nominatim) return nominatim;
   }
 
   for (const query of queries) {
-    const photon = await geocodeWithPhoton(query);
+    const photon = await geocodeWithPhoton(query, biasHint);
     if (photon) return photon;
   }
 
@@ -1320,7 +1434,8 @@ async function geocodeLocationText(text) {
 function buildGeocodeQueries(text) {
   const cleaned = String(text || "").trim();
   const lower = cleaned.toLowerCase();
-  const variants = [cleaned];
+  const baseVariants = [...buildSpanishStreetQueryVariants(cleaned), cleaned];
+  const variants = [];
   const mentionsCountry =
     lower.includes(" españa") ||
     lower.includes(",españa") ||
@@ -1328,20 +1443,35 @@ function buildGeocodeQueries(text) {
     lower.includes(",spain") ||
     lower.endsWith(" es");
 
-  if (cleaned && !mentionsCountry) {
-    variants.push(`${cleaned}, España`);
-    variants.push(`${cleaned}, Spain`);
+  for (const variant of baseVariants) {
+    if (!variant) continue;
+    variants.push(variant);
+    if (!mentionsCountry) {
+      variants.push(`${variant}, España`);
+      variants.push(`${variant}, Spain`);
+    }
   }
 
   return [...new Set(variants.filter(Boolean))];
 }
 
-async function geocodeWithNominatim(query) {
-  const localityHint = getLocalityHint(query);
+function buildSpanishStreetQueryVariants(text) {
+  const match = String(text || "").trim().match(/^(calle|avenida|avda\.?|paseo|plaza|carretera)\s+(?!de\s|del\s|de la\s)(.+)$/i);
+  if (!match) return [];
+
+  const prefix = match[1];
+  const rest = match[2];
+  return [`${prefix} de ${rest}`];
+}
+
+async function geocodeWithNominatim(query, biasHint = null) {
+  const localityHint = getLocalityHint(query) || biasHint;
+  const countryConstraint = getCountryConstraint(query, localityHint);
   const viewbox = localityHint ? viewboxForRadius(localityHint, localityHint.radiusMeters) : null;
   const url =
     `https://nominatim.openstreetmap.org/search?` +
-    `format=jsonv2&addressdetails=1&limit=5&countrycodes=es` +
+    `format=jsonv2&addressdetails=1&limit=8` +
+    (countryConstraint ? `&countrycodes=${countryConstraint.codes.join(",")}` : "") +
     (viewbox ? `&viewbox=${viewbox}&bounded=1` : "") +
     `&q=${encodeURIComponent(query)}`;
   const data = await fetchJsonWithTimeout(url, {
@@ -1356,7 +1486,11 @@ async function geocodeWithNominatim(query) {
   }
 
   const best = data
-    .filter((result) => hasValidCoordinates(result.lat, result.lon))
+    .filter((result) =>
+      hasValidCoordinates(result.lat, result.lon) &&
+      resultMatchesCountry(result, countryConstraint) &&
+      resultMatchesLocality(result, localityHint)
+    )
     .sort((a, b) => scoreGeocodeResult(b, localityHint) - scoreGeocodeResult(a, localityHint))[0];
 
   if (!best || !hasValidCoordinates(best.lat, best.lon)) {
@@ -1371,8 +1505,9 @@ async function geocodeWithNominatim(query) {
   };
 }
 
-async function geocodeWithPhoton(query) {
-  const localityHint = getLocalityHint(query);
+async function geocodeWithPhoton(query, biasHint = null) {
+  const localityHint = getLocalityHint(query) || biasHint;
+  const countryConstraint = getCountryConstraint(query, localityHint);
   const url =
     `https://photon.komoot.io/api/?` +
     `limit=5` +
@@ -1392,6 +1527,12 @@ async function geocodeWithPhoton(query) {
       const latitude = Number(coordinates[1]);
       if (!hasValidCoordinates(latitude, longitude)) return null;
       const properties = feature.properties || {};
+      if (
+        !photonResultMatchesCountry(properties, countryConstraint) ||
+        !coordinatesMatchLocality(latitude, longitude, localityHint)
+      ) {
+        return null;
+      }
       const label = [
         properties.name,
         properties.street,
@@ -1424,16 +1565,82 @@ async function geocodeWithPhoton(query) {
 function getLocalityHint(query) {
   const lower = String(query || "").toLowerCase();
   const hints = [
-    { names: ["zaragoza"], latitude: 41.652134, longitude: -0.880943, radiusMeters: 30000 },
-    { names: ["madrid"], latitude: 40.416775, longitude: -3.70379, radiusMeters: 35000 },
-    { names: ["barcelona"], latitude: 41.387397, longitude: 2.168568, radiusMeters: 30000 },
-    { names: ["valencia"], latitude: 39.469907, longitude: -0.376288, radiusMeters: 30000 },
-    { names: ["malaga", "málaga"], latitude: 36.721302, longitude: -4.421637, radiusMeters: 30000 },
-    { names: ["sevilla", "seville"], latitude: 37.389092, longitude: -5.984459, radiusMeters: 30000 },
-    { names: ["montblanc"], latitude: 41.3762, longitude: 1.1619, radiusMeters: 15000 }
+    { names: ["zaragoza"], latitude: 41.652134, longitude: -0.880943, radiusMeters: 30000, countryCodes: ["es"] },
+    { names: ["madrid"], latitude: 40.416775, longitude: -3.70379, radiusMeters: 35000, countryCodes: ["es"] },
+    { names: ["barcelona"], latitude: 41.387397, longitude: 2.168568, radiusMeters: 30000, countryCodes: ["es"] },
+    { names: ["valencia"], latitude: 39.469907, longitude: -0.376288, radiusMeters: 30000, countryCodes: ["es"] },
+    { names: ["malaga", "málaga"], latitude: 36.721302, longitude: -4.421637, radiusMeters: 30000, countryCodes: ["es"] },
+    { names: ["sevilla", "seville"], latitude: 37.389092, longitude: -5.984459, radiusMeters: 30000, countryCodes: ["es"] },
+    { names: ["santander"], latitude: 43.462306, longitude: -3.80998, radiusMeters: 25000, countryCodes: ["es"] },
+    { names: ["montblanc"], latitude: 41.3762, longitude: 1.1619, radiusMeters: 15000, countryCodes: ["es"] }
   ];
 
   return hints.find((hint) => hint.names.some((name) => lower.includes(name))) || null;
+}
+
+function getCountryConstraint(query, localityHint) {
+  const lower = normalizeSearchText(query);
+  if (localityHint?.countryCodes?.length) {
+    return {
+      codes: localityHint.countryCodes,
+      names: localityHint.countryCodes.includes("es")
+        ? ["espana", "españa", "spain"]
+        : localityHint.countryCodes
+    };
+  }
+
+  if (
+    lower.includes(" espana") ||
+    lower.includes(",espana") ||
+    lower.includes(" españa") ||
+    lower.includes(",españa") ||
+    lower.includes(" spain") ||
+    lower.includes(",spain") ||
+    lower.endsWith(" es")
+  ) {
+    return { codes: ["es"], names: ["espana", "españa", "spain"] };
+  }
+
+  if (lower.includes(" colombia") || lower.includes(",colombia")) {
+    return { codes: ["co"], names: ["colombia", "co"] };
+  }
+
+  return null;
+}
+
+function normalizeSearchText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function resultMatchesCountry(result, countryConstraint) {
+  if (!countryConstraint) return true;
+  const address = result.address || {};
+  const countryCode = String(address.country_code || result.country_code || "").toLowerCase();
+  if (countryCode) return countryConstraint.codes.includes(countryCode);
+  const display = normalizeSearchText(result.display_name || "");
+  return countryConstraint.names.some((name) => display.includes(normalizeSearchText(name)));
+}
+
+function photonResultMatchesCountry(properties, countryConstraint) {
+  if (!countryConstraint) return true;
+  const countryCode = String(properties.countrycode || properties.country_code || "").toLowerCase();
+  if (countryCode) return countryConstraint.codes.includes(countryCode);
+  const country = normalizeSearchText(properties.country || "");
+  return countryConstraint.names.some((name) => country.includes(normalizeSearchText(name)));
+}
+
+function resultMatchesLocality(result, localityHint) {
+  if (!localityHint) return true;
+  return coordinatesMatchLocality(Number(result.lat), Number(result.lon), localityHint);
+}
+
+function coordinatesMatchLocality(latitude, longitude, localityHint) {
+  if (!localityHint) return true;
+  const distance = haversineKm(localityHint, { latitude, longitude });
+  return distance <= (localityHint.radiusMeters / 1000) * 1.15;
 }
 
 function scoreGeocodeResult(result, localityHint) {
@@ -1504,7 +1711,7 @@ function placeFromOsmElement(element, origin) {
   return {
     id: `osm-${element.type}-${element.id}`,
     name,
-    type: "supermarket",
+    type: tags.shop || "supermarket",
     distanceKm: Number(distanceKm.toFixed(2)),
     driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
     address: formatAddress(tags) || tags.operator || tags.brand || "OpenStreetMap location",
@@ -1559,7 +1766,7 @@ async function fetchNominatimSupermarkets(origin, maxResults) {
   for (const radius of supermarketSearchRadiiMeters) {
     const params = new URLSearchParams({
       format: "jsonv2",
-      limit: String(Math.min(Math.max(maxResults * 4, 8), 12)),
+      limit: String(Math.min(Math.max(maxResults * 4, 12), 25)),
       q: "supermarket",
       bounded: "1",
       viewbox: viewboxForRadius(origin, radius)
@@ -1590,15 +1797,19 @@ async function fetchNominatimSupermarkets(origin, maxResults) {
 
 async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
   const startedAt = Date.now();
-  const rawResultLimit = Math.min(Math.max(maxResults * 4, 8), 12);
+  const rawResultLimit = Math.min(Math.max(maxResults * 4, 12), 25);
 
   for (const radius of supermarketSearchRadiiMeters) {
+    const shopFilters = groceryShopValues
+      .map((shop) => `
+        node["shop"="${shop}"](around:${radius},${origin.latitude},${origin.longitude});
+        way["shop"="${shop}"](around:${radius},${origin.latitude},${origin.longitude});
+        relation["shop"="${shop}"](around:${radius},${origin.latitude},${origin.longitude});`)
+      .join("");
     const query = `
       [out:json][timeout:12];
       (
-        node["shop"="supermarket"](around:${radius},${origin.latitude},${origin.longitude});
-        way["shop"="supermarket"](around:${radius},${origin.latitude},${origin.longitude});
-        relation["shop"="supermarket"](around:${radius},${origin.latitude},${origin.longitude});
+        ${shopFilters}
       );
       out center tags ${rawResultLimit};
     `;
@@ -1631,6 +1842,103 @@ async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
   }
 
   return null;
+}
+
+function placeDedupeKey(place) {
+  const roundedLatitude = Math.round(Number(place.latitude) * 10000);
+  const roundedLongitude = Math.round(Number(place.longitude) * 10000);
+  const name = String(place.name || "supermarket")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return `${name}:${roundedLatitude}:${roundedLongitude}`;
+}
+
+function mergePlaceResults(groups, maxResults) {
+  const byKey = new Map();
+  let radiusMeters = null;
+
+  for (const group of groups) {
+    if (!group?.results?.length) continue;
+    radiusMeters = radiusMeters === null
+      ? group.radiusMeters
+      : Math.min(radiusMeters, group.radiusMeters);
+
+    for (const place of group.results) {
+      const key = placeDedupeKey(place);
+      const existing = byKey.get(key);
+      if (!existing || place.distanceKm < existing.distanceKm) {
+        byKey.set(key, place);
+      }
+    }
+  }
+
+  const results = [...byKey.values()]
+    .sort((a, b) => a.distanceKm - b.distanceKm)
+    .slice(0, Math.max(maxResults, routedCandidateLimit));
+
+  return results.length ? { radiusMeters, results } : null;
+}
+
+async function fetchLiveSupermarketCandidates(origin, maxResults) {
+  const candidateLimit = Math.max(maxResults, supermarketCandidateLimit);
+  const lookups = await Promise.allSettled([
+    fetchNominatimSupermarkets(origin, candidateLimit),
+    fetchOpenStreetMapSupermarkets(origin, candidateLimit)
+  ]);
+  const groups = lookups
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value)
+    .filter(Boolean);
+
+  return mergePlaceResults(groups, maxResults);
+}
+
+async function rankSupermarketsByPracticalRoute(origin, places, maxResults) {
+  const candidates = places.slice(0, Math.min(places.length, routedCandidateLimit));
+  const ranked = await Promise.all(
+    candidates.map(async (place) => {
+      const route = await fetchDrivingRoute(origin, place).catch(() => null);
+      if (!route) {
+        return {
+          ...place,
+          route: null,
+          rankingDistanceKm: place.distanceKm,
+          rankingMinutes: place.driveMinutes
+        };
+      }
+
+      return {
+        ...place,
+        driveDistanceKm: route.distanceKm,
+        driveMinutes: route.durationMinutes,
+        route,
+        rankingDistanceKm: place.distanceKm,
+        rankingMinutes: route.durationMinutes
+      };
+    })
+  );
+
+  const byId = new Map(ranked.map((place) => [place.id, place]));
+  for (const place of places.slice(candidates.length)) {
+    byId.set(place.id, {
+      ...place,
+      route: null,
+      rankingDistanceKm: place.distanceKm,
+      rankingMinutes: place.driveMinutes
+    });
+  }
+
+  const sorted = [...byId.values()]
+    .sort((a, b) =>
+      a.rankingDistanceKm - b.rankingDistanceKm ||
+      a.rankingMinutes - b.rankingMinutes ||
+      a.name.localeCompare(b.name)
+    );
+
+  const bestRoute = sorted[0]?.route || null;
+  const results = sorted.slice(0, maxResults).map(({ route, rankingDistanceKm, rankingMinutes, ...place }) => place);
+
+  return { results, route: bestRoute };
 }
 
 function thinRouteCoordinates(coordinates, maxPoints = 90) {
@@ -1684,17 +1992,12 @@ async function findNearbyPlace(args) {
       latitude: Number(args.latitude),
       longitude: Number(args.longitude)
     };
-    const live =
-      (await fetchNominatimSupermarkets(origin, maxResults)) ||
-      (await fetchOpenStreetMapSupermarkets(origin, maxResults));
+    const live = await fetchLiveSupermarketCandidates(origin, maxResults);
 
     if (live?.results?.length) {
-      const best = live.results[0];
-      const route = await fetchDrivingRoute(origin, best).catch(() => null);
-      if (route) {
-        best.distanceKm = route.distanceKm;
-        best.driveMinutes = route.durationMinutes;
-      }
+      const ranked = await rankSupermarketsByPracticalRoute(origin, live.results, maxResults);
+      const best = ranked.results[0];
+      const route = ranked.route;
 
       const label = args.locationLabel || "your location";
       const source =
@@ -1713,7 +2016,7 @@ async function findNearbyPlace(args) {
           accuracyMeters: args.accuracyMeters || null,
           searchRadiusMeters: live.radiusMeters,
           originCoordinates: origin,
-          results: live.results,
+          results: ranked.results,
           route
         }
       };
@@ -1729,8 +2032,8 @@ async function findNearbyPlace(args) {
           typedAddressFailed
             ? "I could not convert that typed address into coordinates. Please enter a fuller address with city and country, or use exact latitude and longitude."
             : fallbackAttempted
-            ? "I could not get precise GPS or an approximate network location. Please allow browser location, enter exact coordinates, or type a city or address as an approximate fallback."
-            : "I do not have a usable start location yet. Please allow browser location, enter exact coordinates, or type a city or address as an approximate fallback.",
+            ? "I could not get a trustworthy start location. Please allow browser GPS, enter exact coordinates, or type a full address with city and country."
+            : "I do not have a usable start location yet. Please allow browser GPS, enter exact coordinates, or type a full address with city and country.",
         data: {
           query: args.query,
           locationSource: typedAddressFailed ? "manual_location_failed" : "missing_location",
@@ -1793,8 +2096,8 @@ function findParkingNearDestination(args) {
         typedAddressFailed
           ? "I could not convert that typed address into coordinates, so I cannot find nearby parking from it. Please enter a fuller address with city and country, or use exact latitude and longitude."
           : fallbackAttempted
-          ? "I could not get precise GPS or an approximate network location, so I cannot find nearby parking yet. Please allow browser location, enter exact coordinates, or type a city or address."
-          : "I need your current location before I can find nearby parking. Please allow browser location, enter exact coordinates, or type a city or address.",
+          ? "I could not get a trustworthy start location, so I cannot find nearby parking yet. Please allow browser GPS, enter exact coordinates, or type a full address with city and country."
+          : "I need your current location before I can find nearby parking. Please allow browser GPS, enter exact coordinates, or type a full address with city and country.",
       data: {
         destination: args.destination,
         locationSource: typedAddressFailed ? "manual_location_failed" : "missing_location",
@@ -1849,8 +2152,8 @@ function getRoadAlerts(args) {
         typedAddressFailed
           ? "I could not convert that typed address into coordinates, so I cannot check road alerts from it. Please enter a fuller address with city and country, or use exact latitude and longitude."
           : fallbackAttempted
-          ? "I could not get precise GPS or an approximate network location, so I cannot check road alerts from your position yet. Please allow browser location, enter exact coordinates, or type a city or address."
-          : "I need your current location before I can check road alerts. Please allow browser location, enter exact coordinates, or type a city or address.",
+          ? "I could not get a trustworthy start location, so I cannot check road alerts from your position yet. Please allow browser GPS, enter exact coordinates, or type a full address with city and country."
+          : "I need your current location before I can check road alerts. Please allow browser GPS, enter exact coordinates, or type a full address with city and country.",
       data: {
         origin: args.origin || "current_location",
         locationSource: typedAddressFailed ? "manual_location_failed" : "missing_location",
