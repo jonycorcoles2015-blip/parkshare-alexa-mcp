@@ -88,6 +88,7 @@ const fallbackLocation = {
 const supermarketSearchRadiiMeters = [750, 1500, 2500, 5000, 15000, 50000, 100000];
 const supermarketCandidateLimit = 80;
 const routedCandidateLimit = 6;
+const minimumAlternativeCandidates = 12;
 const maxUsableBrowserAccuracyMeters = 250;
 const geocodingTimeoutMs = 4500;
 const nominatimSearchTimeoutMs = 3500;
@@ -297,7 +298,7 @@ const pageScenarios = {
     label: "Supermercado cercano",
     driver: "Alexa, pide a ParkShare que encuentre el supermercado mas cercano a mi ubicacion.",
     tool: "find_nearby_place",
-    args: { query: "supermarket", maxResults: 3 },
+    args: { query: "supermarket", maxResults: 5 },
     needsLocation: true,
     context: "Busqueda real de supermercados desde la ubicacion activa",
     steps: [
@@ -311,7 +312,7 @@ const pageScenarios = {
     label: "Gasolinera cercana",
     driver: "Alexa, pide a ParkShare que encuentre la gasolinera mas cercana a mi ubicacion.",
     tool: "find_nearby_place",
-    args: { query: "gas station", maxResults: 3 },
+    args: { query: "gas station", maxResults: 5 },
     needsLocation: true,
     context: "Busqueda real de gasolineras desde la ubicacion activa",
     steps: [
@@ -325,7 +326,7 @@ const pageScenarios = {
     label: "Hotel o motel cercano",
     driver: "Alexa, pide a ParkShare que encuentre el hotel o motel mas cercano a mi ubicacion.",
     tool: "find_nearby_place",
-    args: { query: "hotel", maxResults: 3 },
+    args: { query: "hotel", maxResults: 5 },
     needsLocation: true,
     context: "Busqueda real de descanso en carretera desde la ubicacion activa",
     steps: [
@@ -1785,7 +1786,7 @@ function formatMinutes(minutes) {
 function formatAvailabilityForSpeech(place) {
   if (place.availability === "open") return " Parece abierto ahora.";
   if (place.availability === "closed") return " Puede estar cerrado ahora, revisalo antes de ir.";
-  return "";
+  return " No tengo el horario confirmado.";
 }
 
 function describeStartLocation(source, label) {
@@ -1821,6 +1822,15 @@ function categorySingularEs(category) {
   return "supermercado";
 }
 
+function categoryWithArticleEs(category) {
+  const id = typeof category === "string" ? category : category?.id;
+  if (id === "gas_station") return "la gasolinera";
+  if (id === "hotel") return "el hotel o motel";
+  if (id === "pharmacy") return "la farmacia";
+  if (id === "food") return "el sitio para comer";
+  return "el supermercado";
+}
+
 function categoryPluralEs(category) {
   const id = typeof category === "string" ? category : category?.id;
   if (id === "gas_station") return "gasolineras";
@@ -1828,6 +1838,62 @@ function categoryPluralEs(category) {
   if (id === "pharmacy") return "farmacias";
   if (id === "food") return "sitios para comer";
   return "supermercados";
+}
+
+function formatAlternativeAvailability(place) {
+  if (place.availability === "open") return "abierto ahora";
+  if (place.availability === "closed") return "puede no estar abierto";
+  return "horario no confirmado";
+}
+
+function formatNearbyAlternative(place) {
+  return `${place.name}, ${place.distanceKm} km, ${formatMinutes(place.driveMinutes)}, ${formatAlternativeAvailability(place)}`;
+}
+
+function buildNearbyPlaceSpeech({ source, label, liveCategory, best, nearestByDistance, results }) {
+  const originText = describeStartLocation(source, label);
+  const categoryText = categoryWithArticleEs(liveCategory);
+  const alternatives = results
+    .filter((place) => place.id !== best.id)
+    .slice(0, 3)
+    .map(formatNearbyAlternative);
+  const alternativesText = alternatives.length
+    ? ` Alternativas cercanas: ${alternatives.join("; ")}.`
+    : "";
+
+  if (
+    nearestByDistance &&
+    nearestByDistance.id !== best.id &&
+    nearestByDistance.availability === "closed"
+  ) {
+    const recommendationText = best.availability === "open"
+      ? "La mejor opcion abierta"
+      : "La mejor alternativa encontrada";
+    return (
+      `Usando ${originText}, ${categoryText} mas cercana por distancia es ${nearestByDistance.name}, ` +
+      `a unos ${nearestByDistance.distanceKm} kilometros, pero puede no estar abierta. ` +
+      `${recommendationText} es ${best.name}, a unos ${best.distanceKm} kilometros. ` +
+      `El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)}.${formatAvailabilityForSpeech(best)}` +
+      alternativesText
+    );
+  }
+
+  if (best.availability === "closed") {
+    return (
+      `Usando ${originText}, encontre ${best.name}, ${categoryText} mas cercana por distancia, ` +
+      `a unos ${best.distanceKm} kilometros, pero puede no estar abierta. ` +
+      `Revisa una alternativa antes de desviarte.${alternativesText}`
+    );
+  }
+
+  const categoryStatusText = best.availability === "open"
+    ? `${categoryText} mas cercana abierta`
+    : `${categoryText} mas cercana encontrada`;
+  return (
+    `Usando ${originText}, encontre ${best.name}, ${categoryStatusText}, ` +
+    `a unos ${best.distanceKm} kilometros. El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)}.` +
+    `${formatAvailabilityForSpeech(best)}${alternativesText}`
+  );
 }
 
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
@@ -2552,6 +2618,9 @@ function placeFromNominatimResult(result, origin, category = livePlaceCategories
 }
 
 async function fetchNominatimPlaces(origin, category, maxResults) {
+  const groups = [];
+  const minimumCandidates = Math.min(maxResults, minimumAlternativeCandidates);
+
   for (const radius of supermarketSearchRadiiMeters) {
     for (const term of category.nominatimQueries) {
       const params = new URLSearchParams({
@@ -2580,12 +2649,16 @@ async function fetchNominatimPlaces(origin, category, maxResults) {
         .slice(0, maxResults);
 
       if (results.length) {
-        return { radiusMeters: radius, results };
+        groups.push({ radiusMeters: radius, results });
+        const merged = mergePlaceResults(groups, maxResults);
+        if (merged?.results?.length >= minimumCandidates || radius >= 15000) {
+          return merged;
+        }
       }
     }
   }
 
-  return null;
+  return mergePlaceResults(groups, maxResults);
 }
 
 async function fetchNominatimSupermarkets(origin, maxResults) {
@@ -2629,6 +2702,8 @@ function buildOverpassCategoryQuery(category, radius, origin, rawResultLimit) {
 async function fetchOpenStreetMapPlaces(origin, category, maxResults) {
   const startedAt = Date.now();
   const rawResultLimit = Math.min(Math.max(maxResults * 6, 40), 100);
+  const groups = [];
+  const minimumCandidates = Math.min(maxResults, minimumAlternativeCandidates);
 
   for (const radius of supermarketSearchRadiiMeters) {
     const query = buildOverpassCategoryQuery(category, radius, origin, rawResultLimit);
@@ -2655,12 +2730,16 @@ async function fetchOpenStreetMapPlaces(origin, category, maxResults) {
         .slice(0, maxResults);
 
       if (results.length) {
-        return { radiusMeters: radius, results };
+        groups.push({ radiusMeters: radius, results });
+        const merged = mergePlaceResults(groups, maxResults);
+        if (merged?.results?.length >= minimumCandidates || radius >= 15000) {
+          return merged;
+        }
       }
     }
   }
 
-  return null;
+  return mergePlaceResults(groups, maxResults);
 }
 
 async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
@@ -2697,7 +2776,7 @@ function mergePlaceResults(groups, maxResults) {
 
   const results = [...byKey.values()]
     .sort((a, b) => a.distanceKm - b.distanceKm)
-    .slice(0, Math.max(maxResults, routedCandidateLimit));
+    .slice(0, Math.max(maxResults, routedCandidateLimit, minimumAlternativeCandidates));
 
   return results.length ? { radiusMeters, results } : null;
 }
@@ -2717,13 +2796,13 @@ async function fetchLivePlaceCandidates(origin, category, maxResults) {
     .map((result) => result.value)
     .filter(Boolean);
 
-  return mergePlaceResults(groups, maxResults);
+  return mergePlaceResults(groups, candidateLimit);
 }
 
 function getPlaceAvailability(place, context = {}) {
   const openingHours = String(place.openingHours || "").trim();
   if (!openingHours) {
-    return { status: "unknown", rank: 0 };
+    return { status: "unknown", rank: 1 };
   }
 
   const lower = openingHours.toLowerCase();
@@ -2734,7 +2813,7 @@ function getPlaceAvailability(place, context = {}) {
   const weekday = Number(context.clientWeekday);
   const minutes = Number(context.clientMinutes);
   if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6 || !Number.isFinite(minutes)) {
-    return { status: "unknown", rank: 0 };
+    return { status: "unknown", rank: 1 };
   }
 
   const matchingSegments = openingHours
@@ -2761,7 +2840,7 @@ function getPlaceAvailability(place, context = {}) {
     }
   }
 
-  return sawTimedRule ? { status: "closed", rank: 1 } : { status: "unknown", rank: 0 };
+  return sawTimedRule ? { status: "closed", rank: 2 } : { status: "unknown", rank: 1 };
 }
 
 function openingHoursSegmentMatchesDay(segment, weekday) {
@@ -2829,7 +2908,14 @@ async function rankSupermarketsByPracticalRoute(origin, places, maxResults, cont
     });
   }
 
-  const sorted = [...byId.values()]
+  const allRanked = [...byId.values()];
+  const nearestByDistance = [...allRanked]
+    .sort((a, b) =>
+      a.distanceKm - b.distanceKm ||
+      a.rankingMinutes - b.rankingMinutes ||
+      a.name.localeCompare(b.name)
+    )[0] || null;
+  const sorted = allRanked
     .sort((a, b) =>
       a.rankingAvailability - b.rankingAvailability ||
       a.rankingDistanceKm - b.rankingDistanceKm ||
@@ -2846,7 +2932,13 @@ async function rankSupermarketsByPracticalRoute(origin, places, maxResults, cont
     ...place
   }) => place);
 
-  return { results, route: bestRoute };
+  return {
+    results,
+    route: bestRoute,
+    nearestByDistance: nearestByDistance
+      ? (({ route, rankingAvailability, rankingDistanceKm, rankingMinutes, ...place }) => place)(nearestByDistance)
+      : null
+  };
 }
 
 function thinRouteCoordinates(coordinates, maxPoints = 90) {
@@ -2920,10 +3012,14 @@ async function findNearbyPlace(args) {
         (args.accuracyMeters ? "browser_geolocation" : "provided_coordinates");
 
       return {
-        spoken:
-          `Usando ${describeStartLocation(source, label)}, ` +
-          `encontre ${best.name}, el ${categorySingularEs(liveCategory)} mas cercano, a unos ${best.distanceKm} kilometros. ` +
-          `El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)}.${formatAvailabilityForSpeech(best)}`,
+        spoken: buildNearbyPlaceSpeech({
+          source,
+          label,
+          liveCategory,
+          best,
+          nearestByDistance: ranked.nearestByDistance,
+          results: ranked.results
+        }),
         data: {
           query: args.query,
           category: liveCategory.id,
@@ -2932,6 +3028,8 @@ async function findNearbyPlace(args) {
           accuracyMeters: args.accuracyMeters || null,
           searchRadiusMeters: live.radiusMeters,
           originCoordinates: origin,
+          recommendedResult: best,
+          nearestByDistance: ranked.nearestByDistance,
           results: ranked.results,
           route
         }
