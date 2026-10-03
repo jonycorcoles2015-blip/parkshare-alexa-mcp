@@ -61,20 +61,32 @@ const demoAlerts = [
   {
     id: "mobile-control-town-entrance",
     type: "mobile_control",
-    label: "Mobile control near town entrance",
+    label: "Control movil reportado en una via cercana",
     severity: "medium",
     distanceKm: 3.1,
     reportedMinutesAgo: 18,
-    alternateRouteDeltaMinutes: 5
+    alternateRouteDeltaMinutes: 5,
+    reason: "Aviso comunitario reciente de control movil"
   },
   {
     id: "traffic-slow-roundabout",
     type: "traffic_jam",
-    label: "Slow traffic near roundabout",
+    label: "Retencion ligera cerca de una rotonda",
     severity: "low",
     distanceKm: 1.4,
     reportedMinutesAgo: 7,
-    alternateRouteDeltaMinutes: 2
+    alternateRouteDeltaMinutes: 2,
+    reason: "Trafico lento reportado por conductores"
+  },
+  {
+    id: "fixed-speed-camera-main-road",
+    type: "speed_camera",
+    label: "Radar fijo senalizado en via principal",
+    severity: "low",
+    distanceKm: 2.4,
+    reportedMinutesAgo: 0,
+    alternateRouteDeltaMinutes: 0,
+    reason: "Aviso preventivo de radar fijo en carretera"
   }
 ];
 
@@ -354,9 +366,9 @@ const pageScenarios = {
     label: "Alertas de carretera",
     driver: "Alexa, pregunta a ParkShare si hay alertas de carretera desde mi ubicacion.",
     tool: "get_road_alerts",
-    args: { origin: "current_location", destination: "Montblanc", includeAlternativeRoute: true },
+    args: { origin: "current_location", destination: "zona actual", includeAlternativeRoute: true },
     needsLocation: true,
-    context: "Alertas comunitarias de ruta",
+    context: "Alertas comunitarias cerca de tu ubicacion",
     steps: [
       "Usar GPS del navegador, coordenadas exactas o direccion escrita",
       "Comprobar controles, radares y avisos de trafico activos",
@@ -841,6 +853,9 @@ const page = `<!doctype html>
         if (place.status === "likely_free") return "probablemente libre";
         if (place.status === "unknown_but_likely") return "posible hueco";
         if (place.status === "fallback") return "zona alternativa";
+        if (place.type === "mobile_control") return "control reportado";
+        if (place.type === "traffic_jam") return "retencion reportada";
+        if (place.type === "speed_camera") return "radar senalizado";
         if (place.availability === "open") return "abierto ahora";
         if (place.availability === "closed") return "puede estar cerrado";
         return "horario no confirmado";
@@ -852,7 +867,9 @@ const page = `<!doctype html>
           ? data.results
           : data && Array.isArray(data.parkingLeads)
             ? data.parkingLeads
-            : [];
+            : data && Array.isArray(data.alerts)
+              ? data.alerts
+              : [];
         if (!places.length) {
           const empty = document.createElement("div");
           empty.className = "result";
@@ -885,7 +902,10 @@ const page = `<!doctype html>
           distance.textContent = distanceText + " · " + minutesText + " · " + formatPlaceAvailabilityLabel(place);
 
           const address = document.createElement("span");
-          address.textContent = place.address || place.reason || "Direccion no confirmada";
+          const reported = Number.isFinite(Number(place.reportedMinutesAgo)) && Number(place.reportedMinutesAgo) > 0
+            ? "Reportado hace " + Math.round(Number(place.reportedMinutesAgo)) + " min. "
+            : "";
+          address.textContent = reported + (place.address || place.reason || "Direccion no confirmada");
 
           card.append(title, distance, address);
           nearbyResults.appendChild(card);
@@ -1704,7 +1724,9 @@ const page = `<!doctype html>
           ? data.results
           : data && Array.isArray(data.parkingLeads)
             ? data.parkingLeads
-            : [];
+            : data && Array.isArray(data.alerts)
+              ? data.alerts
+              : [];
         const destination = resultList[0];
         if (!origin || !destination || !destination.latitude || !destination.longitude) return;
         if (!ensureMap(origin.latitude, origin.longitude)) return;
@@ -3552,6 +3574,46 @@ function buildParkingLeadsForOrigin(args) {
   });
 }
 
+function buildRoadAlertsForOrigin(args) {
+  const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+  if (!hasCoordinates) {
+    return demoAlerts.map((alert) => ({
+      ...alert,
+      name: alert.label,
+      driveMinutes: Math.max(1, Math.round((alert.distanceKm / 35) * 60)),
+      address: alert.reason
+    }));
+  }
+
+  const latitude = Number(args.latitude);
+  const longitude = Number(args.longitude);
+  const origin = { latitude, longitude };
+  const metersPerDegreeLatitude = 111320;
+  const metersPerDegreeLongitude = Math.max(1, 111320 * Math.cos(latitude * Math.PI / 180));
+  const offsets = [
+    { north: 900, east: 2960 },
+    { north: -450, east: 1320 },
+    { north: 1700, east: -1700 }
+  ];
+
+  return demoAlerts.map((alert, index) => {
+    const offset = offsets[index] || offsets[offsets.length - 1];
+    const alertLatitude = latitude + offset.north / metersPerDegreeLatitude;
+    const alertLongitude = longitude + offset.east / metersPerDegreeLongitude;
+    const distanceKm = haversineKm(origin, { latitude: alertLatitude, longitude: alertLongitude });
+
+    return {
+      ...alert,
+      name: alert.label,
+      distanceKm: Number(distanceKm.toFixed(2)),
+      driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
+      latitude: alertLatitude,
+      longitude: alertLongitude,
+      address: alert.reason
+    };
+  });
+}
+
 function findParkingNearDestination(args) {
   const requireConfirmation = args.requirePreviousSpotConfirmation !== false;
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
@@ -3625,7 +3687,6 @@ function findParkingNearDestination(args) {
 }
 
 function getRoadAlerts(args) {
-  const primary = demoAlerts[0];
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
   const impreciseBrowserLocation = hasCoordinates && hasImpreciseBrowserLocation(args);
   const needsCurrentLocation =
@@ -3667,12 +3728,19 @@ function getRoadAlerts(args) {
   const originDescription = hasCoordinates
     ? describeStartLocation(locationSource, locationLabel)
     : args.origin || "ubicacion actual";
+  const alerts = buildRoadAlertsForOrigin(args);
+  const primary = alerts[0];
+  const destination = args.destination || "zona actual";
+  const routeAlternative =
+    primary.alternateRouteDeltaMinutes > 0
+      ? `Si sigues hacia esa zona, la ruta alternativa anade unos ${primary.alternateRouteDeltaMinutes} minutos.`
+      : "No hace falta calcular ruta alternativa para este aviso.";
 
   return {
     spoken:
-      `Usando ${originDescription}, encontre ${demoAlerts.length} alertas comunitarias en la ruta hacia ${args.destination}. ` +
-      `${primary.label} esta a ${primary.distanceKm} kilometros. ` +
-      `La ruta alternativa tarda unos ${primary.alternateRouteDeltaMinutes} minutos mas.`,
+      `Usando ${originDescription}, encontre ${alerts.length} alertas comunitarias cerca de tu ubicacion. ` +
+      `${primary.label} esta a ${primary.distanceKm} kilometros y fue reportado hace ${primary.reportedMinutesAgo} minutos. ` +
+      routeAlternative,
     data: {
       origin: args.origin || "current_location",
       locationSource,
@@ -3683,9 +3751,9 @@ function getRoadAlerts(args) {
             longitude: Number(args.longitude)
           }
         : null,
-      destination: args.destination,
+      destination,
       includeAlternativeRoute: args.includeAlternativeRoute !== false,
-      alerts: demoAlerts
+      alerts
     }
   };
 }
