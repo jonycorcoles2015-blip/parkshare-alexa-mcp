@@ -908,22 +908,31 @@ const page = `<!doctype html>
           return "Alexa, ask ParkShare if there are road alerts from my location.";
         }
 
+        const target = getScenarioTarget(scenario, "singular");
         if (source === "coordinates") {
-          return "Alexa, ask ParkShare to find the nearest supermarket from these exact coordinates.";
+          return "Alexa, ask ParkShare to find " + target + " from these exact coordinates.";
         }
         if (source === "typed") {
-          return "Alexa, ask ParkShare to find the nearest supermarket from this typed city or address.";
+          return "Alexa, ask ParkShare to find " + target + " from this typed city or address.";
         }
-        return "Alexa, ask ParkShare to find the nearest supermarket from my location.";
+        return "Alexa, ask ParkShare to find " + target + " from my location.";
+      }
+
+      function getScenarioTarget(scenario, form) {
+        const query = String((scenario.args && scenario.args.query) || "").toLowerCase();
+        if (scenario.tool === "find_parking_near_destination") return "parking";
+        if (scenario.tool === "get_road_alerts") return "road alerts";
+        if (query.includes("gas station") || query.includes("fuel")) {
+          return form === "singular" ? "the nearest gas station" : "gas stations";
+        }
+        if (query.includes("hotel") || query.includes("motel")) {
+          return form === "singular" ? "the nearest hotel or motel" : "hotels and motels";
+        }
+        return form === "singular" ? "the nearest supermarket" : "supermarkets";
       }
 
       function getLocationProgressMessage(scenario, source) {
-        const target =
-          scenario.tool === "find_parking_near_destination"
-            ? "parking"
-            : scenario.tool === "get_road_alerts"
-              ? "road alerts"
-              : "supermarkets";
+        const target = getScenarioTarget(scenario, "plural");
 
         if (source === "coordinates") {
           return "Searching " + target + " from the exact coordinates you entered...";
@@ -935,12 +944,7 @@ const page = `<!doctype html>
       }
 
       function getLocationAcknowledgement(scenario, source) {
-        const target =
-          scenario.tool === "find_parking_near_destination"
-            ? "parking"
-            : scenario.tool === "get_road_alerts"
-              ? "road alerts"
-              : "the nearest supermarket";
+        const target = getScenarioTarget(scenario, "singular");
 
         if (source === "coordinates") {
           return "I will search " + target + " from the exact coordinates you entered.";
@@ -962,6 +966,16 @@ const page = `<!doctype html>
           return "your approximate network location";
         }
         return label || "the selected location";
+      }
+
+      function describeStructuredCategory(structured) {
+        if (!structured || !structured.category) return "";
+        if (structured.category === "gas_station") return "the nearest gas station, ";
+        if (structured.category === "hotel") return "the nearest hotel or motel, ";
+        if (structured.category === "pharmacy") return "the nearest pharmacy, ";
+        if (structured.category === "food") return "the nearest place to eat, ";
+        if (structured.category === "supermarket") return "the nearest supermarket, ";
+        return "";
       }
 
       function textHasLocalityContext(text) {
@@ -1044,7 +1058,8 @@ const page = `<!doctype html>
             structured.locationLabel || "your location"
           );
           data.content[0].text =
-            "Using " + label + ", I found " + destination.name + ", about " +
+            "Using " + label + ", I found " + destination.name + ", " +
+            describeStructuredCategory(structured) + "about " +
             destination.distanceKm + " kilometers away. The drive is around " +
             formatMinutes(route.durationMinutes) + ".";
         }
