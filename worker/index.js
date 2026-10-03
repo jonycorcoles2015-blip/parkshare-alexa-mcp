@@ -664,9 +664,13 @@ const page = `<!doctype html>
         locationStatus.textContent = text;
       }
 
+      function getLocationPermissionPromptMessage() {
+        return "Allow location / Permitir ubicación: when the browser asks, choose Allow. ParkShare will use that GPS point for this demo session.";
+      }
+
       async function requestBrowserLocationForSearch() {
         try {
-          setLocationStatus("Requesting precise browser GPS...");
+          setLocationStatus(getLocationPermissionPromptMessage());
           const location = await getBrowserLocation();
           cachedBrowserLocation = {
             ...location,
@@ -690,25 +694,25 @@ const page = `<!doctype html>
 
       function getLocationFailureMessage(error) {
         if (error && error.code === "GEOLOCATION_UNSUPPORTED") {
-          return "This embedded browser cannot open the GPS permission prompt. Open the demo in Chrome/Safari, or enter exact coordinates or a full address before searching.";
+          return "This browser cannot open the location permission prompt. Open the demo in Chrome/Safari, or type your address or exact coordinates.";
         }
 
         if (error && error.code === 1) {
-          return "Location permission was denied. Type the address where you are, or enter exact coordinates, so ParkShare can search near you.";
+          return "Location permission was denied. Press Allow / Permitir ubicación when the browser asks, or type your address or exact coordinates.";
         }
 
         if (error && error.code === 2) {
-          return "The browser could not determine your current GPS position. Try again outside this embedded browser, or enter exact coordinates or a full address.";
+          return "The browser could not determine your GPS position. If the permission prompt appears, press Allow / Permitir ubicación. If no prompt appears in this embedded browser, type your address or exact coordinates.";
         }
 
         if (error && error.code === 3) {
-          return "The GPS request timed out. Try again, open the demo in Chrome/Safari, or enter exact coordinates or a full address.";
+          return "The GPS request timed out. Press Allow / Permitir ubicación if the browser asks, or type your address or exact coordinates.";
         }
 
-        return "Browser GPS was not available. Open the demo in Chrome/Safari, or enter exact coordinates or a full address before searching. IP/network location is not used because it can be wrong by kilometers.";
+        return "Browser GPS was not available. Press Allow / Permitir ubicación if the browser asks, or type your address or exact coordinates. IP/network location is not used because it can be wrong by kilometers.";
       }
 
-      function showMissingLocationResult(scenario, driverText, message) {
+      function showMissingLocationResult(scenario, driverText, message, driverAlreadyAdded = false) {
         const structuredContent = {
           query: scenario.args && scenario.args.query ? scenario.args.query : scenario.tool,
           locationSource: "missing_location",
@@ -721,7 +725,9 @@ const page = `<!doctype html>
         };
 
         assistantAnswer.textContent = message;
-        addMessage("driver", driverText);
+        if (!driverAlreadyAdded) {
+          addMessage("driver", driverText);
+        }
         addMessage("assistant", message);
         renderStructured(structuredContent);
         rawResponse.textContent = JSON.stringify(data, null, 2);
@@ -1037,6 +1043,10 @@ const page = `<!doctype html>
               addMessage("driver", driverText);
               addMessage("assistant", getLocationAcknowledgement(scenario, "typed"));
             } else {
+              driverText = getLocationDriverText(scenario, "browser");
+              assistantAnswer.textContent = getLocationPermissionPromptMessage();
+              addMessage("driver", driverText);
+              addMessage("assistant", getLocationPermissionPromptMessage());
               try {
                 const locationResult = await requestBrowserLocationForSearch();
                 const location = locationResult.location;
@@ -1049,18 +1059,16 @@ const page = `<!doctype html>
                 args.locationLabel = locationResult.fromCache
                   ? "your saved browser location from this session"
                   : "your precise browser location";
-                driverText = getLocationDriverText(scenario, "browser");
                 assistantAnswer.textContent = getLocationProgressMessage(scenario, "browser");
-                addMessage("driver", driverText);
                 addMessage("assistant", getLocationAcknowledgement(scenario, "browser"));
               } catch (locationError) {
-                driverText = getLocationDriverText(scenario, "browser");
                 args.locationSource = "missing_location";
                 args.gpsFallbackReason = getLocationFailureMessage(locationError);
                 showMissingLocationResult(
                   scenario,
                   driverText,
-                  getLocationFailureMessage(locationError)
+                  getLocationFailureMessage(locationError),
+                  true
                 );
                 return;
               }
