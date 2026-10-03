@@ -788,7 +788,8 @@ const page = `<!doctype html>
         try {
           const raw =
             (window.localStorage && window.localStorage.getItem(browserLocationStorageKey)) ||
-            (window.sessionStorage && window.sessionStorage.getItem(browserLocationStorageKey));
+            (window.sessionStorage && window.sessionStorage.getItem(browserLocationStorageKey)) ||
+            readCookieValue(browserLocationStorageKey);
           if (!raw) return null;
           const parsed = JSON.parse(raw);
           if (!parsed || typeof parsed.latitude !== "number" || typeof parsed.longitude !== "number") {
@@ -816,8 +817,22 @@ const page = `<!doctype html>
           if (window.sessionStorage) {
             window.sessionStorage.removeItem(browserLocationStorageKey);
           }
+          document.cookie = browserLocationStorageKey + "=; path=/; max-age=0; SameSite=Lax";
         } catch (error) {
           // Storage can be disabled in embedded browsers.
+        }
+      }
+
+      function readCookieValue(name) {
+        try {
+          const prefix = name + "=";
+          const entry = String(document.cookie || "")
+            .split(";")
+            .map((part) => part.trim())
+            .find((part) => part.startsWith(prefix));
+          return entry ? decodeURIComponent(entry.slice(prefix.length)) : null;
+        } catch (error) {
+          return null;
         }
       }
 
@@ -851,6 +866,10 @@ const page = `<!doctype html>
           if (window.sessionStorage) {
             window.sessionStorage.setItem(browserLocationStorageKey, JSON.stringify(cachedBrowserLocation));
           }
+          document.cookie =
+            browserLocationStorageKey + "=" +
+            encodeURIComponent(JSON.stringify(cachedBrowserLocation)) +
+            "; path=/; max-age=86400; SameSite=Lax";
         } catch (error) {
           // Storage can be disabled in embedded browsers.
         }
