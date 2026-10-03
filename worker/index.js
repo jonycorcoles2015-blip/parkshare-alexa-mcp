@@ -63,9 +63,9 @@ const demoAlerts = [
     type: "mobile_control",
     label: "Control movil",
     severity: "medium",
-    distanceKm: 3.1,
+    distanceKm: 0.4,
     reportedMinutesAgo: 18,
-    alternateRouteDeltaMinutes: 5,
+    alternateRouteDeltaMinutes: 2,
     reason: "Aviso de demostracion generado por ParkShare para ensenar el flujo de controles"
   },
   {
@@ -73,9 +73,9 @@ const demoAlerts = [
     type: "traffic_jam",
     label: "Retencion ligera",
     severity: "low",
-    distanceKm: 1.4,
+    distanceKm: 0.6,
     reportedMinutesAgo: 7,
-    alternateRouteDeltaMinutes: 2,
+    alternateRouteDeltaMinutes: 1,
     reason: "Aviso de demostracion generado por ParkShare para ensenar el flujo de retenciones"
   },
   {
@@ -83,7 +83,7 @@ const demoAlerts = [
     type: "speed_camera",
     label: "Radar fijo senalizado",
     severity: "low",
-    distanceKm: 2.4,
+    distanceKm: 0.9,
     reportedMinutesAgo: 0,
     alternateRouteDeltaMinutes: 0,
     reason: "Aviso de demostracion generado por ParkShare para ensenar el flujo de radares"
@@ -369,7 +369,7 @@ const pageScenarios = {
     tool: "get_road_alerts",
     args: { origin: "current_location", destination: "zona actual", includeAlternativeRoute: true },
     needsLocation: true,
-    context: "Alertas comunitarias cerca de tu ubicacion",
+    context: "Avisos demo de carretera cerca de tu ubicacion",
     steps: [
       "Usar GPS del navegador, coordenadas exactas o direccion escrita",
       "Comprobar controles, radares y avisos de trafico activos",
@@ -729,7 +729,7 @@ const page = `<!doctype html>
         </section>
 
         <section class="nearby-list">
-          <h2>Sitios cercanos</h2>
+          <h2 id="nearbyTitle">Sitios cercanos</h2>
           <div class="nearby-results" id="nearbyResults">
             <div class="result">Cuando hagas una busqueda cercana, apareceran aqui varias opciones ordenadas por distancia.</div>
           </div>
@@ -782,6 +782,7 @@ const page = `<!doctype html>
       const locationDiagnostics = document.querySelector("#locationDiagnostics");
       const steps = document.querySelector("#steps");
       const results = document.querySelector("#results");
+      const nearbyTitle = document.querySelector("#nearbyTitle");
       const nearbyResults = document.querySelector("#nearbyResults");
       const routeQuestion = document.querySelector("#routeQuestion");
       const confirmSpotFree = document.querySelector("#confirmSpotFree");
@@ -871,10 +872,17 @@ const page = `<!doctype html>
             : data && Array.isArray(data.alerts)
               ? data.alerts
               : [];
+        nearbyTitle.textContent = data && Array.isArray(data.alerts)
+          ? "Avisos demo cercanos"
+          : data && Array.isArray(data.parkingLeads)
+            ? "Pistas de aparcamiento"
+            : "Sitios cercanos";
         if (!places.length) {
           const empty = document.createElement("div");
           empty.className = "result";
-          empty.textContent = "No hay sitios cercanos para mostrar todavia.";
+          empty.textContent = data && Array.isArray(data.alerts)
+            ? "No hay avisos para mostrar todavia."
+            : "No hay sitios cercanos para mostrar todavia.";
           nearbyResults.appendChild(empty);
           return;
         }
@@ -1737,14 +1745,28 @@ const page = `<!doctype html>
         placeMarkers.forEach((marker) => marker.remove());
         placeMarkers = [];
 
-        driverMarker = L.marker([origin.latitude, origin.longitude]).addTo(map).bindPopup("Tu ubicacion");
+        const isAlertMap = data && Array.isArray(data.alerts);
+        driverMarker = L.circleMarker([origin.latitude, origin.longitude], {
+          radius: 8,
+          color: "#0f766e",
+          fillColor: "#14b8a6",
+          fillOpacity: 0.95,
+          weight: 3
+        }).addTo(map).bindPopup("Tu ubicacion");
         const mappedPlaces = resultList.slice(0, 5);
         mappedPlaces.forEach((place, index) => {
           if (!place || !place.latitude || !place.longitude) return;
           const label = String(index + 1) + ". " + (place.name || place.label || "Destino");
-          const marker = L.marker([place.latitude, place.longitude])
-            .addTo(map)
-            .bindPopup(label);
+          const marker = isAlertMap
+            ? L.circleMarker([place.latitude, place.longitude], {
+                radius: 7,
+                color: place.type === "traffic_jam" ? "#b45309" : place.type === "speed_camera" ? "#7c2d12" : "#b91c1c",
+                fillColor: place.type === "traffic_jam" ? "#f59e0b" : place.type === "speed_camera" ? "#f97316" : "#ef4444",
+                fillOpacity: 0.9,
+                weight: 2
+              })
+            : L.marker([place.latitude, place.longitude]);
+          marker.addTo(map).bindPopup(label);
           placeMarkers.push(marker);
         });
 
@@ -3646,9 +3668,9 @@ async function buildRoadAlertsForOrigin(args) {
   const metersPerDegreeLatitude = 111320;
   const metersPerDegreeLongitude = Math.max(1, 111320 * Math.cos(latitude * Math.PI / 180));
   const offsets = [
-    { north: 900, east: 2960 },
-    { north: -450, east: 1320 },
-    { north: 1700, east: -1700 }
+    { north: 260, east: -290 },
+    { north: -430, east: 360 },
+    { north: 720, east: 560 }
   ];
 
   const alerts = demoAlerts.map((alert, index) => {
