@@ -1,102 +1,5 @@
 const PROTOCOL_VERSION = "2025-11-25";
 
-const demoPlaces = [
-  {
-    id: "mercadona-montblanc",
-    name: "Mercadona Montblanc",
-    type: "supermarket",
-    distanceKm: 5.2,
-    driveMinutes: 7,
-    address: "Montblanc, Tarragona",
-    parkingLeads: 3
-  },
-  {
-    id: "pharmacy-montblanc",
-    name: "Farmacia Montblanc Centre",
-    type: "pharmacy",
-    distanceKm: 5.6,
-    driveMinutes: 8,
-    address: "Centre, Montblanc",
-    parkingLeads: 2
-  },
-  {
-    id: "restaurant-old-town",
-    name: "Restaurant near old town",
-    type: "restaurant",
-    distanceKm: 5.8,
-    driveMinutes: 9,
-    address: "Old town, Montblanc",
-    parkingLeads: 1
-  }
-];
-
-const demoParking = [
-  {
-    id: "parking-active-primary",
-    label: "Free street parking lead",
-    distanceMeters: 230,
-    confidence: "fresh-community-signal",
-    walkingMinutes: 3,
-    status: "likely_free"
-  },
-  {
-    id: "parking-active-secondary",
-    label: "Second practical option",
-    distanceMeters: 410,
-    confidence: "recent-area-signal",
-    walkingMinutes: 6,
-    status: "unknown_but_likely"
-  },
-  {
-    id: "parking-active-wide-area",
-    label: "Wider fallback area",
-    distanceMeters: 690,
-    confidence: "low-density-area",
-    walkingMinutes: 9,
-    status: "fallback"
-  }
-];
-
-const demoAlerts = [
-  {
-    id: "mobile-control-town-entrance",
-    type: "mobile_control",
-    label: "Control movil",
-    severity: "medium",
-    distanceKm: 0.4,
-    reportedMinutesAgo: 18,
-    alternateRouteDeltaMinutes: 2,
-    reason: "Aviso de demostracion generado por ParkShare para ensenar el flujo de controles"
-  },
-  {
-    id: "traffic-slow-roundabout",
-    type: "traffic_jam",
-    label: "Retencion ligera",
-    severity: "low",
-    distanceKm: 0.6,
-    reportedMinutesAgo: 7,
-    alternateRouteDeltaMinutes: 1,
-    reason: "Aviso de demostracion generado por ParkShare para ensenar el flujo de retenciones"
-  },
-  {
-    id: "fixed-speed-camera-main-road",
-    type: "speed_camera",
-    label: "Radar fijo senalizado",
-    severity: "low",
-    distanceKm: 0.9,
-    reportedMinutesAgo: 0,
-    alternateRouteDeltaMinutes: 0,
-    reason: "Aviso de demostracion generado por ParkShare para ensenar el flujo de radares"
-  }
-];
-
-const fallbackLocation = {
-  latitude: 41.3762,
-  longitude: 1.1619,
-  label: "Montblanc demo fallback",
-  source: "demo_montblanc_fallback"
-};
-
 const supermarketSearchRadiiMeters = [750, 1500, 2500, 5000, 15000, 50000, 100000];
 const supermarketCandidateLimit = 80;
 const routedCandidateLimit = 6;
@@ -105,9 +8,19 @@ const maxUsableBrowserAccuracyMeters = 250;
 const geocodingTimeoutMs = 4500;
 const nominatimSearchTimeoutMs = 3500;
 const reverseGeocodingTimeoutMs = 3000;
+const dgtTrafficAlertTimeoutMs = 5500;
+const parkingSpotMaxAgeMinutes = 20;
+const officialRoadAlertRadiusKm = 25;
 const overpassTimeoutMs = 12000;
 const overpassOverallTimeoutMs = 12000;
 const routeTimeoutMs = 8000;
+const dgtTrafficAlertSources = [
+  {
+    id: "dgt_srti_lod",
+    label: "DGT SRTI LOD",
+    url: "https://infocar.dgt.es/datex2/lod/dgt/incidencias.rdf"
+  }
+];
 const overpassEndpoints = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter"
@@ -140,6 +53,15 @@ const livePlaceCategories = [
     aliases: ["hotel", "hotels", "motel", "motels", "hostal", "alojamiento"],
     filters: [{ key: "tourism", values: ["hotel", "motel", "hostel", "guest_house"] }],
     nominatimQueries: ["hotel", "motel"]
+  },
+  {
+    id: "parking",
+    singular: "parking",
+    plural: "parking options",
+    defaultName: "Aparcamiento",
+    aliases: ["parking", "aparcamiento", "aparcar", "estacionamiento", "zona azul", "zona de aparcamiento"],
+    filters: [{ key: "amenity", values: ["parking", "parking_space", "motorcycle_parking"] }],
+    nominatimQueries: ["parking", "aparcamiento"]
   },
   {
     id: "pharmacy",
@@ -182,11 +104,11 @@ const toolDefinitions = [
         },
         latitude: {
           type: "number",
-          description: "Driver latitude. Demo data is used when omitted."
+          description: "Driver latitude."
         },
         longitude: {
           type: "number",
-          description: "Driver longitude. Demo data is used when omitted."
+          description: "Driver longitude."
         },
         maxResults: {
           type: "integer",
@@ -201,7 +123,7 @@ const toolDefinitions = [
   {
     name: "find_parking_near_destination",
     description:
-      "Find practical parking leads around a destination and explain the walking distance and confidence.",
+      "Find ParkShare user-released parking stock first, then real mapped parking alternatives from OpenStreetMap. Never invent parking availability.",
     inputSchema: {
       type: "object",
       properties: {
@@ -211,16 +133,26 @@ const toolDefinitions = [
         },
         latitude: {
           type: "number",
-          description: "Destination latitude. Demo data is used when omitted."
+          description: "Destination latitude."
         },
         longitude: {
           type: "number",
-          description: "Destination longitude. Demo data is used when omitted."
+          description: "Destination longitude."
+        },
+        communityParkingSpots: {
+          type: "array",
+          description: "Parking spots actually released by ParkShare users in the current browser session."
         },
         requirePreviousSpotConfirmation: {
           type: "boolean",
           default: true,
           description: "Whether ParkShare should ask if the old parking spot was left free before routing."
+        },
+        maxResults: {
+          type: "integer",
+          minimum: 1,
+          maximum: 5,
+          default: 5
         }
       },
       required: ["destination"]
@@ -229,7 +161,7 @@ const toolDefinitions = [
   {
     name: "get_road_alerts",
     description:
-      "Return community road alerts for a route, including controls, speed cameras, accidents, roadworks and traffic jams.",
+      "Return real official road alerts when available near the route origin. Do not invent alerts.",
     inputSchema: {
       type: "object",
       properties: {
@@ -270,11 +202,11 @@ const toolDefinitions = [
         },
         latitude: {
           type: "number",
-          description: "Latitude of the released spot. Demo coordinates are used when omitted."
+          description: "Latitude of the released spot. Required to publish a real ParkShare parking spot."
         },
         longitude: {
           type: "number",
-          description: "Longitude of the released spot. Demo coordinates are used when omitted."
+          description: "Longitude of the released spot. Required to publish a real ParkShare parking spot."
         },
         confirmation: {
           type: "string",
@@ -358,8 +290,8 @@ const pageScenarios = {
     context: "Guia de aparcamiento desde la ubicacion activa",
     steps: [
       "Usar GPS del navegador, coordenadas exactas o direccion escrita",
-      "Comprobar stock activo de aparcamiento",
-      "Elegir la pista de aparcamiento practica mas cercana",
+      "Comprobar stock ParkShare liberado por usuarios",
+      "Si no hay stock, buscar aparcamientos reales mapeados cerca",
       "Preguntar si se ha dejado libre la plaza anterior"
     ]
   },
@@ -369,7 +301,7 @@ const pageScenarios = {
     tool: "get_road_alerts",
     args: { origin: "current_location", destination: "zona actual", includeAlternativeRoute: true },
     needsLocation: true,
-    context: "Avisos demo de carretera cerca de tu ubicacion",
+    context: "Alertas reales de carretera cerca de tu ubicacion",
     steps: [
       "Usar GPS del navegador, coordenadas exactas o direccion escrita",
       "Comprobar controles, radares y avisos de trafico activos",
@@ -379,9 +311,10 @@ const pageScenarios = {
   },
   release: {
     label: "Liberar plaza",
-    driver: "Alexa, dile a ParkShare que he dejado mi plaza libre.",
+    driver: "Alexa, dile a ParkShare que he dejado mi plaza libre en mi ubicacion.",
     tool: "release_parking_spot",
     args: { confirmation: "driver_confirmed_free" },
+    needsLocation: true,
     context: "Actualizacion colaborativa de aparcamiento",
     steps: [
       "Confirmar la intencion del conductor",
@@ -674,16 +607,16 @@ const page = `<!doctype html>
           <div class="brand-mark">P</div>
           <h1>ParkShare Alexa+ MCP</h1>
           <p>
-            Demo interactiva del copiloto de movilidad ParkShare para Alexa+. La busqueda de sitios cercanos
+            Experiencia interactiva del copiloto de movilidad ParkShare para Alexa+. La busqueda de sitios cercanos
             usa el GPS real del navegador cuando es suficientemente preciso, consulta datos vivos de
             OpenStreetMap y dibuja la ruta en un mapa real. Los clientes MCP usan <code>POST /mcp</code>;
-            esta demo web llama a <code>POST /demo</code> con las mismas funciones de ParkShare.
+            esta pagina llama a <code>POST /demo</code> con las mismas funciones de ParkShare.
           </p>
           <div class="status">MCP activo · Diagnostico GPS</div>
         </section>
 
         <section>
-          <h2>Escenarios demo</h2>
+          <h2>Escenarios reales</h2>
           <div class="actions" id="actions"></div>
         </section>
 
@@ -790,7 +723,9 @@ const page = `<!doctype html>
       const rawResponse = document.querySelector("#rawResponse");
       const maxUsableBrowserAccuracyMeters = ${maxUsableBrowserAccuracyMeters};
       const browserLocationStorageKey = "parkshareDemoBrowserLocation";
+      const releasedParkingStorageKey = "parkshareDemoReleasedParkingSpots";
       const maxCachedBrowserLocationAgeMs = 24 * 60 * 60 * 1000;
+      const releasedParkingMaxAgeMs = ${parkingSpotMaxAgeMinutes} * 60 * 1000;
       const browserLocationAttemptCount = 4;
       const browserLocationAttemptTimeoutMs = 6000;
       const browserLocationRetryDelayMs = 800;
@@ -852,6 +787,13 @@ const page = `<!doctype html>
 
       function formatPlaceAvailabilityLabel(place) {
         if (!place) return "horario no confirmado";
+        if (place.official) return "alerta oficial";
+        if (place.source === "parkshare_user_reported_session") return "reportado por usuario";
+        if (place.category === "parking" || place.type === "parking" || place.type === "parking_space") {
+          if (String(place.fee || "").toLowerCase() === "no") return "parking real gratuito";
+          if (String(place.fee || "").toLowerCase() === "yes") return "parking real de pago";
+          return "parking real mapeado";
+        }
         if (place.status === "likely_free") return "probablemente libre";
         if (place.status === "unknown_but_likely") return "posible hueco";
         if (place.status === "fallback") return "zona alternativa";
@@ -872,17 +814,22 @@ const page = `<!doctype html>
             : data && Array.isArray(data.alerts)
               ? data.alerts
               : [];
-        nearbyTitle.textContent = data && Array.isArray(data.alerts)
-          ? "Avisos demo cercanos"
+        const isAlertList = data && Array.isArray(data.alerts);
+        nearbyTitle.textContent = isAlertList
+          ? "Alertas reales cercanas"
           : data && Array.isArray(data.parkingLeads)
-            ? "Pistas de aparcamiento"
+            ? data.parkShareStockAvailable
+              ? "Stock ParkShare y alternativas reales"
+              : "Aparcamientos reales cercanos"
             : "Sitios cercanos";
         if (!places.length) {
           const empty = document.createElement("div");
           empty.className = "result";
-          empty.textContent = data && Array.isArray(data.alerts)
-            ? "No hay avisos para mostrar todavia."
-            : "No hay sitios cercanos para mostrar todavia.";
+          empty.textContent = isAlertList
+            ? "No hay alertas reales cercanas para mostrar ahora mismo."
+            : data && Array.isArray(data.parkingLeads)
+              ? "No hay plazas reales reportadas por usuarios ParkShare ahora mismo."
+              : "No hay sitios cercanos para mostrar todavia.";
           nearbyResults.appendChild(empty);
           return;
         }
@@ -1238,7 +1185,7 @@ const page = `<!doctype html>
         renderLocationDiagnostics();
         if (cachedBrowserLocation) {
           setLocationStatus(
-            "GPS preciso guardado para esta demo. Precisión aproximada: " +
+            "GPS preciso guardado para esta sesion. Precisión aproximada: " +
             Math.round(cachedBrowserLocation.accuracyMeters || 0) +
             " metros."
           );
@@ -1266,11 +1213,11 @@ const page = `<!doctype html>
         }
 
         if (state === "unavailable") {
-          setLocationStatus("Este navegador no expone GPS. Abre la demo en Chrome/Safari o escribe coordenadas/dirección exacta.");
+          setLocationStatus("Este navegador no expone GPS. Abre la pagina en Chrome/Safari o escribe coordenadas/dirección exacta.");
           return;
         }
 
-        setLocationStatus("Pulsa Permitir ubicación. Si no aparece ningún aviso nativo, este navegador está bloqueando GPS: abre la demo en Chrome/Safari o escribe coordenadas/dirección exacta.");
+        setLocationStatus("Pulsa Permitir ubicación. Si no aparece ningún aviso nativo, este navegador está bloqueando GPS: abre la pagina en Chrome/Safari o escribe coordenadas/dirección exacta.");
       }
 
       async function refreshLocationPermissionState() {
@@ -1321,7 +1268,7 @@ const page = `<!doctype html>
       }
 
       function getLocationPermissionPromptMessage() {
-        return "ParkShare está solicitando tu ubicación al navegador. Si aparece el aviso nativo, pulsa Permitir. Si no aparece, este navegador está bloqueando el permiso y debes abrir la demo en Chrome/Safari o usar dirección/coordenadas.";
+        return "ParkShare está solicitando tu ubicación al navegador. Si aparece el aviso nativo, pulsa Permitir. Si no aparece, este navegador está bloqueando el permiso y debes abrir la pagina en Chrome/Safari o usar dirección/coordenadas.";
       }
 
       async function requestBrowserLocationForSearch() {
@@ -1360,7 +1307,7 @@ const page = `<!doctype html>
           if (cachedBrowserLocation && isUsableBrowserLocation(cachedBrowserLocation)) {
             lastLocationError = error;
             renderLocationDiagnostics();
-            setLocationStatus("El navegador no ha dado un GPS preciso ahora, asi que uso el ultimo GPS preciso guardado para esta demo.");
+            setLocationStatus("El navegador no ha dado un GPS preciso ahora, asi que uso el ultimo GPS preciso guardado para esta sesion.");
             return { location: cachedBrowserLocation, fromCache: true };
           }
           lastLocationError = error;
@@ -1420,13 +1367,13 @@ const page = `<!doctype html>
         }
 
         if (error && error.code === "GEOLOCATION_UNSUPPORTED") {
-          return "Este navegador no puede abrir el aviso de permiso de ubicación. Abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
+          return "Este navegador no puede abrir el aviso de permiso de ubicación. Abre la pagina en Chrome/Safari o escribe dirección exacta/coordenadas.";
         }
 
         if (error && error.code === "GEOLOCATION_TOO_IMPRECISE") {
           const accuracy = Number(error.accuracyMeters);
           const accuracyText = Number.isFinite(accuracy) ? Math.round(accuracy) + " m" : "demasiado baja";
-          return "Chrome ha concedido el permiso, pero no está entregando GPS real: solo una ubicación aproximada de red (" + accuracyText + "). En un PC suele pasar porque no hay GPS; en Android activa Ubicación precisa para Chrome y Precisión de ubicación de Google. No la uso para buscar sitios cercanos porque puede mandarte a otro barrio. Para esta demo, escribe una dirección exacta o coordenadas.";
+          return "Chrome ha concedido el permiso, pero no está entregando GPS real: solo una ubicación aproximada de red (" + accuracyText + "). En un PC suele pasar porque no hay GPS; en Android activa Ubicación precisa para Chrome y Precisión de ubicación de Google. No la uso para buscar sitios cercanos porque puede mandarte a otro barrio. Para esta sesion, escribe una dirección exacta o coordenadas.";
         }
 
         if (error && error.code === 1) {
@@ -1437,11 +1384,11 @@ const page = `<!doctype html>
           if (effectivePermissionState === "granted") {
             return "El permiso de ubicación está concedido, pero este navegador no entrega coordenadas GPS (POSITION_UNAVAILABLE). No es un problema de botones ni de cookies: prueba Chrome/Safari o escribe una dirección/coordenadas.";
           }
-          return "La página ha pedido la ubicación, pero este navegador no pudo entregar GPS ni mostró un permiso utilizable. Abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
+          return "La página ha pedido la ubicación, pero este navegador no pudo entregar GPS ni mostró un permiso utilizable. Abre la pagina en Chrome/Safari o escribe dirección exacta/coordenadas.";
         }
 
         if (error && error.code === 3) {
-          return "La petición GPS agotó el tiempo. Si aparece el aviso, pulsa Permitir. Si no aparece, abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
+          return "La petición GPS agotó el tiempo. Si aparece el aviso, pulsa Permitir. Si no aparece, abre la pagina en Chrome/Safari o escribe dirección exacta/coordenadas.";
         }
 
         return "El GPS del navegador no está disponible. Pulsa Permitir si el navegador lo pide, o escribe dirección exacta/coordenadas. No uso IP/red porque puede fallar por kilómetros.";
@@ -1484,7 +1431,7 @@ const page = `<!doctype html>
 
           if (!response.ok) {
             const message = await response.text().catch(() => "");
-            throw new Error(message || "La demo de ParkShare no pudo responder.");
+            throw new Error(message || "ParkShare no pudo responder.");
           }
 
           return response.json();
@@ -1543,6 +1490,16 @@ const page = `<!doctype html>
       }
 
       function getLocationDriverText(scenario, source) {
+        if (scenario.tool === "release_parking_spot") {
+          if (source === "coordinates") {
+            return "Alexa, dile a ParkShare que he dejado libre una plaza en estas coordenadas exactas.";
+          }
+          if (source === "typed") {
+            return "Alexa, dile a ParkShare que he dejado libre una plaza en esta direccion escrita.";
+          }
+          return "Alexa, dile a ParkShare que he dejado libre una plaza en mi ubicacion.";
+        }
+
         if (scenario.tool === "find_parking_near_destination") {
           if (source === "coordinates") {
             return "Alexa, pide a ParkShare que busque aparcamiento cerca de estas coordenadas exactas.";
@@ -1575,6 +1532,7 @@ const page = `<!doctype html>
 
       function getScenarioTarget(scenario, form) {
         const query = String((scenario.args && scenario.args.query) || "").toLowerCase();
+        if (scenario.tool === "release_parking_spot") return "plaza libre";
         if (scenario.tool === "find_parking_near_destination") return "aparcamiento";
         if (scenario.tool === "get_road_alerts") return "alertas de carretera";
         if (query.includes("gas station") || query.includes("fuel")) {
@@ -1588,6 +1546,9 @@ const page = `<!doctype html>
 
       function getLocationProgressMessage(scenario, source) {
         const target = getScenarioTarget(scenario, "plural");
+        if (scenario.tool === "release_parking_spot") {
+          return "Registrando la plaza libre desde esta ubicacion...";
+        }
 
         if (source === "coordinates") {
           return "Buscando " + target + " desde las coordenadas exactas introducidas...";
@@ -1600,6 +1561,9 @@ const page = `<!doctype html>
 
       function getLocationAcknowledgement(scenario, source) {
         const target = getScenarioTarget(scenario, "singular");
+        if (scenario.tool === "release_parking_spot") {
+          return "Ubicacion confirmada. Registrare esa plaza como libre para esta sesion.";
+        }
 
         if (source === "coordinates") {
           return "Buscare " + target + " desde las coordenadas exactas introducidas.";
@@ -1647,6 +1611,56 @@ const page = `<!doctype html>
         if (destination.availability === "open") return " Parece abierto ahora.";
         if (destination.availability === "closed") return " Puede estar cerrado ahora, revisalo antes de ir.";
         return " No tengo el horario confirmado.";
+      }
+
+      function loadReleasedParkingSpots() {
+        try {
+          const raw = window.localStorage && window.localStorage.getItem(releasedParkingStorageKey);
+          const parsed = raw ? JSON.parse(raw) : [];
+          const now = Date.now();
+          return Array.isArray(parsed)
+            ? parsed.filter((spot) =>
+                spot &&
+                Number.isFinite(Number(spot.latitude)) &&
+                Number.isFinite(Number(spot.longitude)) &&
+                Number.isFinite(Number(spot.releasedAt)) &&
+                now - Number(spot.releasedAt) <= releasedParkingMaxAgeMs
+              )
+            : [];
+        } catch (error) {
+          return [];
+        }
+      }
+
+      function saveReleasedParkingSpots(spots) {
+        try {
+          if (!window.localStorage) return;
+          window.localStorage.setItem(releasedParkingStorageKey, JSON.stringify(spots.slice(0, 20)));
+        } catch (error) {
+          // Browser storage can be disabled; the server response still stays visible.
+        }
+      }
+
+      function rememberReleasedParkingSpot(data) {
+        const structured = data && (data.structuredContent || data);
+        const coordinates = structured && structured.coordinates;
+        if (!coordinates || !Number.isFinite(Number(coordinates.latitude)) || !Number.isFinite(Number(coordinates.longitude))) {
+          return;
+        }
+        if (structured.spotStatus !== "free") return;
+
+        const now = Date.now();
+        const nextSpot = {
+          id: structured.parkingSessionId || "released-" + now,
+          latitude: Number(coordinates.latitude),
+          longitude: Number(coordinates.longitude),
+          releasedAt: Number(structured.releasedAt || now),
+          expiresInMinutes: Number(structured.expiresInMinutes || ${parkingSpotMaxAgeMinutes}),
+          source: "parkshare_user_reported_session"
+        };
+        const existing = loadReleasedParkingSpots()
+          .filter((spot) => spot.id !== nextSpot.id);
+        saveReleasedParkingSpots([nextSpot, ...existing]);
       }
 
       function textHasLocalityContext(text) {
@@ -1798,7 +1812,7 @@ const page = `<!doctype html>
         document.querySelectorAll("button").forEach((button) => { button.disabled = true; });
         assistantAnswer.textContent = scenario.needsLocation
           ? "Solicitando ubicacion del navegador..."
-          : "Llamando a la demo MCP de ParkShare...";
+          : "Consultando ParkShare MCP...";
         contextTitle.textContent = scenario.context;
         renderSteps(scenario.steps);
 
@@ -1867,7 +1881,14 @@ const page = `<!doctype html>
             addMessage("driver", driverText);
           }
 
+          if (scenario.tool === "find_parking_near_destination") {
+            args.communityParkingSpots = loadReleasedParkingSpots();
+          }
+
           const data = await fetchDemoResult(scenario.tool, args);
+          if (scenario.tool === "release_parking_spot") {
+            rememberReleasedParkingSpot(data);
+          }
           await addBrowserRouteIfNeeded(data);
           const answer = data.content && data.content[0]
             ? data.content[0].text
@@ -1885,7 +1906,7 @@ const page = `<!doctype html>
           assistantAnswer.textContent =
             error && error.name === "AbortError"
               ? "La busqueda en directo ha tardado demasiado. Intentalo de nuevo o escribe una ciudad o direccion mas especifica."
-              : "El navegador no pudo completar esta peticion de demo de ParkShare.";
+              : "El navegador no pudo completar esta peticion de ParkShare.";
           addMessage("assistant", assistantAnswer.textContent);
           rawResponse.textContent = String(error && error.message ? error.message : error);
         } finally {
@@ -1908,10 +1929,11 @@ const page = `<!doctype html>
           const coordinates = lastParkingPrompt.destinationCoordinates || lastParkingPrompt.originCoordinates || {};
           const data = await fetchDemoResult("confirm_previous_spot_free", {
             answer,
-            parkingSessionId: lastParkingPrompt.parkingSessionId || "demo-session",
+            parkingSessionId: lastParkingPrompt.parkingSessionId || "parkshare-session",
             latitude: coordinates.latitude,
             longitude: coordinates.longitude
           });
+          rememberReleasedParkingSpot(data);
           const answerText = data.content && data.content[0]
             ? data.content[0].text
             : "Respuesta registrada.";
@@ -1941,7 +1963,7 @@ const page = `<!doctype html>
       confirmSpotFree.addEventListener("click", () => answerPreviousSpotQuestion("yes"));
       declineSpotFree.addEventListener("click", () => answerPreviousSpotQuestion("no"));
 
-      renderSteps(["Elige un escenario demo", "La pagina llamara a POST /demo", "Los clientes MCP siguen usando POST /mcp"]);
+      renderSteps(["Elige un escenario real", "La pagina llamara a POST /demo", "Los clientes MCP siguen usando POST /mcp"]);
       renderNearbyResults({});
       clearRouteQuestion();
       renderStructured({});
@@ -2072,7 +2094,8 @@ async function handleDemo(request) {
     const toolCanUseCurrentLocation = [
       "find_nearby_place",
       "find_parking_near_destination",
-      "get_road_alerts"
+      "get_road_alerts",
+      "release_parking_spot"
     ].includes(tool);
 
     if (
@@ -2282,6 +2305,7 @@ function categorySingularEs(category) {
   const id = typeof category === "string" ? category : category?.id;
   if (id === "gas_station") return "gasolinera";
   if (id === "hotel") return "hotel o motel";
+  if (id === "parking") return "aparcamiento";
   if (id === "pharmacy") return "farmacia";
   if (id === "food") return "sitio para comer";
   return "supermercado";
@@ -2291,6 +2315,7 @@ function categoryPluralEs(category) {
   const id = typeof category === "string" ? category : category?.id;
   if (id === "gas_station") return "gasolineras";
   if (id === "hotel") return "hoteles o moteles";
+  if (id === "parking") return "aparcamientos";
   if (id === "pharmacy") return "farmacias";
   if (id === "food") return "sitios para comer";
   return "supermercados";
@@ -2371,6 +2396,28 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
     }
 
     return response.json();
+  } catch (error) {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchTextWithTimeout(url, options = {}, timeoutMs = 7000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return response.text();
   } catch (error) {
     return null;
   } finally {
@@ -3009,6 +3056,67 @@ function formatAddress(tags = {}) {
     .join(" ");
 }
 
+function parkingDefaultName(tags = {}) {
+  const parkingType = String(tags.parking || "").toLowerCase();
+  const fee = String(tags.fee || "").toLowerCase();
+  const access = String(tags.access || "").toLowerCase();
+  const prefix =
+    fee === "no"
+      ? "Aparcamiento gratuito"
+      : fee === "yes"
+        ? "Aparcamiento de pago"
+        : access === "customers"
+          ? "Aparcamiento para clientes"
+          : "Aparcamiento";
+
+  if (parkingType === "surface") return `${prefix} en superficie`;
+  if (parkingType === "street_side" || parkingType === "lane" || parkingType === "street") return `${prefix} en calle`;
+  if (parkingType === "underground") return `${prefix} subterraneo`;
+  if (parkingType === "multi-storey") return `${prefix} cubierto`;
+  if (parkingType === "rooftop") return `${prefix} en azotea`;
+  return `${prefix} mapeado`;
+}
+
+function classifyMappedParking(tags = {}) {
+  const fee = String(tags.fee || "").toLowerCase();
+  const access = String(tags.access || "").toLowerCase();
+  const parkingType = String(tags.parking || "").toLowerCase();
+
+  if (fee === "yes" || access === "customers" || access === "private") {
+    return {
+      priceType: fee === "yes" ? "paid" : access,
+      availabilityLabel: access === "customers" ? "parking para clientes" : "parking de pago/privado",
+      freeCandidate: false,
+      rank: 2
+    };
+  }
+
+  if (fee === "no") {
+    return {
+      priceType: "free",
+      availabilityLabel: "parking gratuito",
+      freeCandidate: true,
+      rank: 0
+    };
+  }
+
+  if (["street_side", "lane", "street", "surface"].includes(parkingType) && access !== "private") {
+    return {
+      priceType: "public_unknown_fee",
+      availabilityLabel: "aparcamiento publico sin precio confirmado",
+      freeCandidate: false,
+      rank: 1
+    };
+  }
+
+  return {
+    priceType: "unknown",
+    availabilityLabel: "precio no confirmado",
+    freeCandidate: false,
+    rank: 1
+  };
+}
+
 function placeFromOsmElement(element, origin, category = livePlaceCategories[0]) {
   const tags = element.tags || {};
   const latitude = element.type === "node" ? element.lat : element.center?.lat;
@@ -3019,16 +3127,30 @@ function placeFromOsmElement(element, origin, category = livePlaceCategories[0])
   }
 
   const distanceKm = haversineKm(origin, { latitude, longitude });
-  const name = tags.name || tags.brand || tags.operator || category.defaultName;
+  const name =
+    tags.name ||
+    tags.brand ||
+    tags.operator ||
+    (category.id === "parking" ? parkingDefaultName(tags) : category.defaultName);
+  const parkingClass = category.id === "parking" ? classifyMappedParking(tags) : null;
 
   return {
     id: `osm-${category.id}-${element.type}-${element.id}`,
     name,
     type: tags.shop || tags.amenity || tags.tourism || category.id,
+    category: category.id,
     distanceKm: Number(distanceKm.toFixed(2)),
     driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
     address: formatAddress(tags) || tags.operator || tags.brand || "OpenStreetMap location",
     openingHours: tags.opening_hours || null,
+    fee: tags.fee || null,
+    access: tags.access || null,
+    parkingType: tags.parking || null,
+    priceType: parkingClass?.priceType || null,
+    availabilityLabel: parkingClass?.availabilityLabel || null,
+    freeCandidate: parkingClass?.freeCandidate || false,
+    parkingRank: parkingClass?.rank ?? null,
+    capacity: tags.capacity || null,
     parkingLeads: 0,
     latitude,
     longitude,
@@ -3059,17 +3181,30 @@ function placeFromNominatimResult(result, origin, category = livePlaceCategories
   const latitude = Number(result.lat);
   const longitude = Number(result.lon);
   const displayName = result.display_name || `OpenStreetMap ${category.singular}`;
-  const name = result.name || displayName.split(",")[0] || category.defaultName;
+  const tags = result.extratags || {};
+  const name =
+    result.name ||
+    displayName.split(",")[0] ||
+    (category.id === "parking" ? parkingDefaultName(tags) : category.defaultName);
   const distanceKm = haversineKm(origin, { latitude, longitude });
+  const parkingClass = category.id === "parking" ? classifyMappedParking(tags) : null;
 
   return {
     id: `nominatim-${category.id}-${result.osm_type || "place"}-${result.osm_id || result.place_id}`,
     name,
     type: category.id,
+    category: category.id,
     distanceKm: Number(distanceKm.toFixed(2)),
     driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
     address: displayName,
     openingHours: result.extratags?.opening_hours || null,
+    fee: tags.fee || null,
+    access: tags.access || null,
+    parkingType: tags.parking || null,
+    priceType: parkingClass?.priceType || null,
+    availabilityLabel: parkingClass?.availabilityLabel || null,
+    freeCandidate: parkingClass?.freeCandidate || false,
+    parkingRank: parkingClass?.rank ?? null,
     parkingLeads: 0,
     latitude,
     longitude,
@@ -3532,7 +3667,7 @@ async function findNearbyPlace(args) {
 
     return {
       spoken:
-        `No pude confirmar ${categoryPluralEs(liveCategory)} reales cerca de esa ubicacion ahora mismo. No usare una demo falsa porque este escenario debe basarse en el punto de inicio real.`,
+        `No pude confirmar ${categoryPluralEs(liveCategory)} reales cerca de esa ubicacion ahora mismo. No mostrare datos no reales porque este escenario debe basarse en el punto de inicio real.`,
       data: {
         query: args.query,
         category: liveCategory.id,
@@ -3548,53 +3683,132 @@ async function findNearbyPlace(args) {
     };
   }
 
-  const matches = demoPlaces
-    .filter((place) => place.type.includes(query) || place.name.toLowerCase().includes(query))
-    .slice(0, maxResults);
-  const results = matches.length ? matches : demoPlaces.slice(0, maxResults);
-  const best = results[0];
-
   return {
     spoken:
-      `No pude confirmar sitios cercanos en directo, asi que use la demo de respaldo de Montblanc. Encontre ${best.name}, a unos ${best.distanceKm} kilometros. ` +
-      `El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)} y encontre ${best.parkingLeads} pistas de aparcamiento cerca.`,
+      "Todavia no tengo esa categoria conectada a busqueda real. Puedo buscar supermercados, gasolineras, hoteles o moteles, aparcamientos, farmacias y sitios para comer desde una ubicacion real.",
     data: {
       query: args.query,
-      locationSource: "demo_montblanc_fallback",
-      originCoordinates: fallbackLocation,
-      results
+      locationSource: hasCoordinates ? args.locationSource || "provided_coordinates" : "missing_location",
+      originCoordinates: hasCoordinates
+        ? {
+            latitude: Number(args.latitude),
+            longitude: Number(args.longitude)
+          }
+        : null,
+      unsupportedCategory: true,
+      results: []
     }
   };
 }
 
 function buildParkingLeadsForOrigin(args) {
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
-  if (!hasCoordinates) {
-    return demoParking;
+  if (!hasCoordinates || !Array.isArray(args.communityParkingSpots)) {
+    return [];
   }
 
   const latitude = Number(args.latitude);
   const longitude = Number(args.longitude);
-  const metersPerDegreeLatitude = 111320;
-  const metersPerDegreeLongitude = Math.max(1, 111320 * Math.cos(latitude * Math.PI / 180));
-  const offsets = [
-    { north: 120, east: -185 },
-    { north: -90, east: 400 },
-    { north: 520, east: -430 }
-  ];
+  const origin = { latitude, longitude };
+  const now = Date.now();
 
-  return demoParking.map((lead, index) => {
-    const offset = offsets[index] || offsets[offsets.length - 1];
-    return {
-      ...lead,
-      name: lead.label,
-      distanceKm: Number((lead.distanceMeters / 1000).toFixed(2)),
-      driveMinutes: lead.walkingMinutes,
-      latitude: latitude + offset.north / metersPerDegreeLatitude,
-      longitude: longitude + offset.east / metersPerDegreeLongitude,
-      address: "Pista comunitaria ParkShare a " + lead.distanceMeters + " m"
-    };
+  return args.communityParkingSpots
+    .map((spot, index) => {
+      if (!hasValidCoordinates(spot?.latitude, spot?.longitude)) return null;
+      const releasedAt = Number(spot.releasedAt || now);
+      const ageMinutes = Math.max(0, Math.round((now - releasedAt) / 60000));
+      if (ageMinutes > parkingSpotMaxAgeMinutes) return null;
+
+      const coordinates = {
+        latitude: Number(spot.latitude),
+        longitude: Number(spot.longitude)
+      };
+      const distanceKm = haversineKm(origin, coordinates);
+
+      return {
+        id: spot.id || `user-released-${index}`,
+        label: "Plaza liberada por usuario ParkShare",
+        name: "Plaza liberada por usuario ParkShare",
+        distanceMeters: Math.round(distanceKm * 1000),
+        distanceKm: Number(distanceKm.toFixed(2)),
+        driveMinutes: Math.max(1, Math.round((distanceKm / 25) * 60)),
+        walkingMinutes: Math.max(1, Math.round((distanceKm / 5) * 60)),
+        confidence: "driver_confirmed",
+        status: "likely_free",
+        latitude: coordinates.latitude,
+        longitude: coordinates.longitude,
+        address: `Plaza real reportada hace ${ageMinutes} min en esta sesion de ParkShare`,
+        source: "parkshare_user_reported_session",
+        releasedAt,
+        expiresInMinutes: Math.max(0, parkingSpotMaxAgeMinutes - ageMinutes)
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.distanceKm - b.distanceKm)
+    .slice(0, 5);
+}
+
+function normalizeMappedParkingLead(place) {
+  const distanceKm = Number(place.distanceKm || 0);
+  return {
+    ...place,
+    label: place.name || "Aparcamiento real mapeado",
+    name: place.name || "Aparcamiento real mapeado",
+    distanceMeters: Math.round(distanceKm * 1000),
+    walkingMinutes: Math.max(1, Math.round((distanceKm / 5) * 60)),
+    confidence: "openstreetmap_mapped_place",
+    status: "mapped_parking",
+    dataSource: "openstreetmap",
+    parkingLeads: undefined
+  };
+}
+
+function rankMappedParkingLeads(results, preferFree = true) {
+  return [...results].sort((a, b) => {
+    if (preferFree) {
+      const rankA = Number.isFinite(Number(a.parkingRank)) ? Number(a.parkingRank) : 1;
+      const rankB = Number.isFinite(Number(b.parkingRank)) ? Number(b.parkingRank) : 1;
+      if (rankA !== rankB) return rankA - rankB;
+    }
+
+    return Number(a.distanceKm || 0) - Number(b.distanceKm || 0) ||
+      Number(a.driveMinutes || 0) - Number(b.driveMinutes || 0) ||
+      String(a.name || "").localeCompare(String(b.name || ""));
   });
+}
+
+async function fetchMappedParkingLeads(origin, maxResults, context = {}) {
+  const parkingCategory = livePlaceCategories.find((category) => category.id === "parking");
+  const live = parkingCategory
+    ? await fetchLivePlaceCandidates(origin, parkingCategory, maxResults)
+    : null;
+
+  if (!live?.results?.length) {
+    return {
+      radiusMeters: live?.radiusMeters || null,
+      route: null,
+      nearestByDistance: null,
+      results: []
+    };
+  }
+
+  const ranked = await rankSupermarketsByPracticalRoute(origin, live.results, Math.max(maxResults, 5), context);
+  const normalizedResults = ranked.results.map(normalizeMappedParkingLead);
+  const preferFree = context.preferFreeParking !== false;
+  const orderedResults = rankMappedParkingLeads(normalizedResults, preferFree).slice(0, maxResults);
+  return {
+    radiusMeters: live.radiusMeters,
+    route: ranked.route,
+    nearestByDistance: ranked.nearestByDistance
+      ? normalizeMappedParkingLead(ranked.nearestByDistance)
+      : null,
+    results: orderedResults
+  };
+}
+
+function formatParkingAlternative(place) {
+  const feeText = place.availabilityLabel || "precio no confirmado";
+  return `${place.name}, ${place.distanceKm} km, ${formatMinutes(place.driveMinutes)}, ${feeText}`;
 }
 
 function formatCoordinatesLabel(latitude, longitude) {
@@ -3649,71 +3863,149 @@ function formatRoadAlertLabel(alert, locationLabel) {
   return `${alert.label} en ${locationLabel}`;
 }
 
-async function buildRoadAlertsForOrigin(args) {
-  const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
-  if (!hasCoordinates) {
-    return demoAlerts.map((alert) => ({
-      ...alert,
-      name: alert.label,
-      driveMinutes: Math.max(1, Math.round((alert.distanceKm / 35) * 60)),
-      address: alert.reason,
-      source: "parkshare_demo_simulated",
-      simulated: true
-    }));
-  }
-
-  const latitude = Number(args.latitude);
-  const longitude = Number(args.longitude);
-  const origin = { latitude, longitude };
-  const metersPerDegreeLatitude = 111320;
-  const metersPerDegreeLongitude = Math.max(1, 111320 * Math.cos(latitude * Math.PI / 180));
-  const offsets = [
-    { north: 260, east: -290 },
-    { north: -430, east: 360 },
-    { north: 720, east: 560 }
-  ];
-
-  const alerts = demoAlerts.map((alert, index) => {
-    const offset = offsets[index] || offsets[offsets.length - 1];
-    const alertLatitude = latitude + offset.north / metersPerDegreeLatitude;
-    const alertLongitude = longitude + offset.east / metersPerDegreeLongitude;
-    const distanceKm = haversineKm(origin, { latitude: alertLatitude, longitude: alertLongitude });
-
-    return {
-      ...alert,
-      name: alert.label,
-      distanceKm: Number(distanceKm.toFixed(2)),
-      driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
-      latitude: alertLatitude,
-      longitude: alertLongitude,
-      address: alert.reason,
-      source: "parkshare_demo_simulated",
-      simulated: true
-    };
-  });
-
-  const enrichedAlerts = await Promise.all(alerts.map(async (alert) => {
-    const resolvedLocation =
-      await reverseGeocodeRoadAlert(alert.latitude, alert.longitude) ||
-      `coordenadas ${formatCoordinatesLabel(alert.latitude, alert.longitude)}`;
-    const label = formatRoadAlertLabel(alert, resolvedLocation);
-    return {
-      ...alert,
-      label,
-      name: label,
-      locationLabel: resolvedLocation,
-      address: `${alert.reason}. Ubicacion de demo: ${resolvedLocation}`
-    };
-  }));
-
-  return enrichedAlerts;
+function stripXmlTags(text) {
+  return String(text || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function findParkingNearDestination(args) {
+function decodeXmlText(text) {
+  return String(text || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function extractFirstXmlValue(block, localName) {
+  const pattern = new RegExp(`<[^>]*:?${localName}\\b[^>]*>([\\s\\S]*?)<\\/[^>]*:?${localName}>`, "i");
+  const match = block.match(pattern);
+  return match ? decodeXmlText(stripXmlTags(match[1])) : "";
+}
+
+function extractFirstNumberByLocalName(block, localName) {
+  const value = extractFirstXmlValue(block, localName);
+  const number = Number(String(value).replace(",", "."));
+  return Number.isFinite(number) ? number : null;
+}
+
+function extractDatexRecordType(block) {
+  const explicitType = block.match(/\b(?:xsi:)?type=["']([^"']+)["']/i)?.[1];
+  if (explicitType) return explicitType.split(":").pop();
+
+  const firstTag = block.match(/<([a-zA-Z][\w:.-]*)\b/)?.[1] || "trafficIncident";
+  return firstTag.split(":").pop();
+}
+
+function humanizeRoadAlertType(type) {
+  const normalized = normalizeSearchText(type).replace(/[^a-z0-9]+/g, " ");
+  if (normalized.includes("accident")) return "Accidente";
+  if (normalized.includes("maintenance") || normalized.includes("roadworks")) return "Obras";
+  if (normalized.includes("abnormaltraffic") || normalized.includes("traffic")) return "Retencion";
+  if (normalized.includes("environmental") || normalized.includes("obstruction")) return "Obstaculo";
+  if (normalized.includes("speed") || normalized.includes("radar")) return "Radar";
+  return "Incidencia de trafico";
+}
+
+function parseDatexLikeTrafficAlerts(xml, origin, source) {
+  if (!xml || !hasValidCoordinates(origin.latitude, origin.longitude)) return [];
+
+  const blocks = [
+    ...xml.matchAll(/<[^>]*situationRecord\b[\s\S]*?<\/[^>]*situationRecord>/gi)
+  ].map((match) => match[0]);
+  const fallbackBlocks = blocks.length
+    ? blocks
+    : [...xml.matchAll(/<dtx_srti:[A-Za-z]+[^>]*rdf:about=["'][^"']+["'][\s\S]*?<\/dtx_srti:[A-Za-z]+>/g)]
+      .map((match) => match[0]);
+
+  return fallbackBlocks
+    .map((block, index) => {
+      const latitude =
+        extractFirstNumberByLocalName(block, "latitude") ??
+        extractFirstNumberByLocalName(block, "lat");
+      const longitude =
+        extractFirstNumberByLocalName(block, "longitude") ??
+        extractFirstNumberByLocalName(block, "lon") ??
+        extractFirstNumberByLocalName(block, "long");
+      if (!hasValidCoordinates(latitude, longitude)) return null;
+
+      const type = extractDatexRecordType(block);
+      const roadName =
+        extractFirstXmlValue(block, "roadName") ||
+        extractFirstXmlValue(block, "roadNumber") ||
+        extractFirstXmlValue(block, "descriptor") ||
+        extractFirstXmlValue(block, "locationDescriptor");
+      const comment =
+        extractFirstXmlValue(block, "comment") ||
+        extractFirstXmlValue(block, "value") ||
+        extractFirstXmlValue(block, "commentValue");
+      const alertOrigin = { latitude: Number(latitude), longitude: Number(longitude) };
+      const distanceKm = haversineKm(origin, alertOrigin);
+      const title = humanizeRoadAlertType(type);
+      const locationText = roadName || `coordenadas ${formatCoordinatesLabel(latitude, longitude)}`;
+
+      return {
+        id: `dgt-${source.id}-${index}`,
+        type: normalizeSearchText(type).replace(/\s+/g, "_") || "traffic_incident",
+        label: `${title} en ${locationText}`,
+        name: `${title} en ${locationText}`,
+        severity: extractFirstXmlValue(block, "severity") || "unknown",
+        distanceKm: Number(distanceKm.toFixed(2)),
+        driveMinutes: Math.max(1, Math.round((distanceKm / 70) * 60)),
+        reportedMinutesAgo: null,
+        alternateRouteDeltaMinutes: 0,
+        latitude: Number(latitude),
+        longitude: Number(longitude),
+        address: comment || `Fuente oficial ${source.label}`,
+        source: source.id,
+        sourceLabel: source.label,
+        official: true
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchOfficialRoadAlerts(origin, maxResults = 5) {
+  const checkedSources = [];
+  const alerts = [];
+
+  for (const source of dgtTrafficAlertSources) {
+    const xml = await fetchTextWithTimeout(source.url, {
+      headers: {
+        "accept": "application/xml,text/xml,application/rdf+xml,text/plain",
+        "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
+      }
+    }, dgtTrafficAlertTimeoutMs);
+
+    checkedSources.push({
+      id: source.id,
+      label: source.label,
+      ok: Boolean(xml),
+      url: source.url
+    });
+
+    if (!xml) continue;
+    alerts.push(...parseDatexLikeTrafficAlerts(xml, origin, source));
+  }
+
+  const sortedAlerts = alerts
+    .filter((alert) => alert.distanceKm <= officialRoadAlertRadiusKm)
+    .sort((a, b) => a.distanceKm - b.distanceKm)
+    .slice(0, maxResults);
+
+  return {
+    alerts: sortedAlerts,
+    checkedSources
+  };
+}
+
+async function findParkingNearDestination(args) {
   const requireConfirmation = args.requirePreviousSpotConfirmation !== false;
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
-  const parkingLeads = buildParkingLeadsForOrigin(args);
-  const best = parkingLeads[0];
+  const maxResults = Math.min(Math.max(Number(args.maxResults || 5), 1), 5);
+  const parkShareParkingLeads = buildParkingLeadsForOrigin(args);
   const impreciseBrowserLocation = hasCoordinates && hasImpreciseBrowserLocation(args);
   const needsCurrentLocation =
     String(args.destination || "").toLowerCase().includes("current location") ||
@@ -3746,15 +4038,87 @@ function findParkingNearDestination(args) {
     };
   }
 
-  const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "demo_destination");
+  const origin = hasCoordinates
+    ? {
+        latitude: Number(args.latitude),
+        longitude: Number(args.longitude)
+      }
+    : null;
+  const mappedParkingLookup = origin
+    ? await fetchMappedParkingLeads(origin, maxResults, args)
+    : { radiusMeters: null, route: null, nearestByDistance: null, results: [] };
+  const mappedParkingLeads = mappedParkingLookup.results;
+  const parkingLeads = [
+    ...parkShareParkingLeads,
+    ...mappedParkingLeads
+  ].slice(0, maxResults);
+
+  if (!parkingLeads.length) {
+    const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "missing_location");
+    const locationLabel = args.locationLabel || args.destination || "el destino seleccionado";
+    return {
+      spoken:
+        `Usando ${hasCoordinates ? describeStartLocation(locationSource, locationLabel) : "esa ubicacion"}, no hay plazas reales reportadas por usuarios ParkShare ni aparcamientos mapeados cerca ahora mismo. ` +
+        "No voy a inventar huecos de aparcamiento; puedo registrar una plaza cuando un conductor la libere.",
+      data: {
+        destination: args.destination,
+        locationSource,
+        locationLabel,
+        destinationCoordinates: hasCoordinates
+          ? {
+              latitude: Number(args.latitude),
+              longitude: Number(args.longitude)
+            }
+          : null,
+        originCoordinates: hasCoordinates
+          ? {
+              latitude: Number(args.latitude),
+              longitude: Number(args.longitude)
+            }
+          : null,
+        dataSource: "parkshare_user_reported_session_and_openstreetmap",
+        parkShareStockAvailable: false,
+        mappedParkingAvailable: false,
+        mappedParkingSearchRadiusMeters: mappedParkingLookup.radiusMeters,
+        parkShareParkingLeads: [],
+        mappedParkingLeads: [],
+        parkingLeads: [],
+        noVerifiedParkingStock: true
+      }
+    };
+  }
+
+  const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "missing_location");
   const locationLabel = args.locationLabel || args.destination || "el destino seleccionado";
   const targetDescription = hasCoordinates
     ? describeStartLocation(locationSource, locationLabel)
     : args.destination;
+  const best = parkingLeads[0];
+  const hasParkShareStock = parkShareParkingLeads.length > 0;
+  const hasMappedParking = mappedParkingLeads.length > 0;
+  const alternatives = parkingLeads
+    .filter((place) => place.id !== best.id)
+    .slice(0, 3)
+    .map(formatParkingAlternative);
+  const alternativesText = alternatives.length
+    ? ` Alternativas reales cercanas: ${alternatives.join("; ")}.`
+    : "";
+  const stockText = hasParkShareStock
+    ? `la plaza ParkShare reportada mas cercana esta a ${best.distanceMeters} metros`
+    : `no hay stock ParkShare liberado por usuarios ahora mismo. Como alternativa real, encontre ${best.name}, a ${best.distanceKm} kilometros`;
+  const sourceClarification = hasParkShareStock
+    ? ""
+    : ` Es ${best.availabilityLabel || "un aparcamiento real mapeado con precio no confirmado"}. La disponibilidad exacta de hueco no esta confirmada porque no es una plaza liberada por usuario.`;
+  const mappedRoute = !hasParkShareStock && origin
+    ? await fetchDrivingRoute(origin, best).catch(() => null)
+    : null;
 
   return {
     spoken:
-      `Usando ${targetDescription}, la pista de aparcamiento practica mas cercana esta a ${best.distanceMeters} metros. ` +
+      `Usando ${targetDescription}, ${stockText}.` +
+      sourceClarification +
+      alternativesText +
+      " " +
       (requireConfirmation
         ? "Antes de iniciar la ruta, has dejado libre tu plaza anterior?"
         : "Puedo iniciar la guia hacia este objetivo de aparcamiento."),
@@ -3774,8 +4138,19 @@ function findParkingNearDestination(args) {
             longitude: Number(args.longitude)
           }
         : null,
-      parkingSessionId: args.parkingSessionId || "demo-session",
+      parkingSessionId: args.parkingSessionId || "parkshare-session",
       requirePreviousSpotConfirmation: requireConfirmation,
+      dataSource: hasParkShareStock && hasMappedParking
+        ? "parkshare_user_reported_session_and_openstreetmap"
+        : hasParkShareStock
+          ? "parkshare_user_reported_session"
+          : "openstreetmap",
+      parkShareStockAvailable: hasParkShareStock,
+      mappedParkingAvailable: hasMappedParking,
+      mappedParkingSearchRadiusMeters: mappedParkingLookup.radiusMeters,
+      parkShareParkingLeads,
+      mappedParkingLeads,
+      route: mappedRoute,
       parkingLeads
     }
   };
@@ -3818,58 +4193,102 @@ async function getRoadAlerts(args) {
     };
   }
 
-  const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "demo_origin");
+  const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "missing_location");
   const locationLabel = args.locationLabel || args.origin || "ubicacion actual";
   const originDescription = hasCoordinates
     ? describeStartLocation(locationSource, locationLabel)
     : args.origin || "ubicacion actual";
-  const alerts = await buildRoadAlertsForOrigin(args);
-  const primary = alerts[0];
+  const originCoordinates = hasCoordinates
+    ? {
+        latitude: Number(args.latitude),
+        longitude: Number(args.longitude)
+      }
+    : null;
   const destination = args.destination || "zona actual";
-  const routeAlternative =
-    primary.alternateRouteDeltaMinutes > 0
-      ? `Si sigues hacia esa zona, la ruta alternativa anade unos ${primary.alternateRouteDeltaMinutes} minutos.`
-      : "No hace falta calcular ruta alternativa para este aviso.";
+  const officialLookup = hasCoordinates
+    ? await fetchOfficialRoadAlerts(originCoordinates, Number(args.maxResults) || 5)
+    : { alerts: [], checkedSources: [] };
+  const alerts = officialLookup.alerts;
+
+  if (alerts.length) {
+    const primary = alerts[0];
+    const routeAlternative =
+      primary.alternateRouteDeltaMinutes > 0
+        ? `Si sigues hacia esa zona, la ruta alternativa anade unos ${primary.alternateRouteDeltaMinutes} minutos.`
+        : "No hace falta calcular ruta alternativa para este aviso.";
+
+    return {
+      spoken:
+        `Usando ${originDescription}, encontre ${alerts.length} alertas reales oficiales cerca de tu ubicacion. ` +
+        `${primary.label} esta a ${primary.distanceKm} kilometros. ` +
+        routeAlternative,
+      data: {
+        origin: args.origin || "current_location",
+        locationSource,
+        locationLabel,
+        originCoordinates,
+        destination,
+        includeAlternativeRoute: args.includeAlternativeRoute !== false,
+        dataSource: "dgt_official",
+        alertSearchRadiusKm: officialRoadAlertRadiusKm,
+        officialSourcesChecked: officialLookup.checkedSources,
+        alerts
+      }
+    };
+  }
 
   return {
     spoken:
-      `Usando ${originDescription}, prepare ${alerts.length} avisos de demostracion cerca de tu ubicacion. ` +
-      `${primary.label} esta a ${primary.distanceKm} kilometros y fue reportado hace ${primary.reportedMinutesAgo} minutos. ` +
-      routeAlternative,
+      `Usando ${originDescription}, no he encontrado alertas reales oficiales de carretera cerca de tu ubicacion ahora mismo. ` +
+      "No voy a inventar controles, radares ni retenciones; los avisos tipo SocialDrive apareceran cuando usuarios ParkShare los reporten o cuando una fuente oficial los publique.",
     data: {
       origin: args.origin || "current_location",
       locationSource,
       locationLabel,
-      originCoordinates: hasCoordinates
-        ? {
-            latitude: Number(args.latitude),
-            longitude: Number(args.longitude)
-          }
-        : null,
+      originCoordinates,
       destination,
       includeAlternativeRoute: args.includeAlternativeRoute !== false,
-      dataSource: "parkshare_demo_simulated",
-      alerts
+      dataSource: "dgt_official",
+      alertSearchRadiusKm: officialRoadAlertRadiusKm,
+      officialSourcesChecked: officialLookup.checkedSources,
+      noOfficialAlertsNearby: true,
+      alerts: []
     }
   };
 }
 
 function releaseParkingSpot(args) {
   const released = (args.confirmation || "driver_confirmed_free") === "driver_confirmed_free";
+  const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+
+  if (released && !hasCoordinates) {
+    return {
+      spoken: "Necesito una ubicacion precisa para marcar una plaza como libre. Permite GPS o introduce coordenadas exactas.",
+      data: {
+        parkingSessionId: args.parkingSessionId || "parkshare-session",
+        spotStatus: "missing_location",
+        needsLocation: true,
+        confidence: "not_recorded",
+        expiresInMinutes: 0
+      }
+    };
+  }
 
   return {
     spoken: released
-      ? "Hecho. Marque tu plaza anterior como libre para conductores cercanos de ParkShare."
+      ? "Hecho. Marque esta plaza como libre para conductores cercanos de ParkShare durante los proximos 20 minutos."
       : "De acuerdo. No marcare esa plaza como libre.",
     data: {
-      parkingSessionId: args.parkingSessionId || "demo-session",
+      parkingSessionId: args.parkingSessionId || "parkshare-session",
       spotStatus: released ? "free" : "not_released",
       confidence: released ? "driver_confirmed" : "driver_declined",
-      expiresInMinutes: released ? 20 : 0,
+      expiresInMinutes: released ? parkingSpotMaxAgeMinutes : 0,
+      dataSource: "parkshare_user_reported_session",
+      releasedAt: Date.now(),
       coordinates:
-        args.latitude && args.longitude
+        hasCoordinates
           ? { latitude: args.latitude, longitude: args.longitude }
-          : { latitude: 41.3762, longitude: 1.1619 }
+          : null
     }
   };
 }
@@ -3880,7 +4299,7 @@ function confirmPreviousSpotFree(args) {
       spoken: "Antes de iniciar la nueva ruta, has dejado libre tu plaza anterior?",
       data: {
         needsDriverAnswer: true,
-        parkingSessionId: args.parkingSessionId || "demo-session"
+        parkingSessionId: args.parkingSessionId || "parkshare-session"
       }
     };
   }
@@ -3898,7 +4317,7 @@ function confirmPreviousSpotFree(args) {
     spoken: "De acuerdo. Mantendre la plaza anterior privada y no la publicare como libre.",
     data: {
       needsDriverAnswer: false,
-      parkingSessionId: args.parkingSessionId || "demo-session",
+      parkingSessionId: args.parkingSessionId || "parkshare-session",
       spotStatus: "not_released"
     }
   };

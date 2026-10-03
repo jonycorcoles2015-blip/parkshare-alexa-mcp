@@ -33,7 +33,7 @@ Alexa+ -> ParkShare MCP server -> ParkShare mobility tools -> parking/routes/ale
 
 The deployable Sites worker lives in `worker/index.js` and exposes `/mcp` over HTTPS after publication.
 
-The server currently uses deterministic demo data so judges can run it locally. The tool interface is designed so the demo data can be replaced by real ParkShare backend endpoints without changing the Alexa+ tool contract.
+The server uses real visitor-provided location, live OpenStreetMap place/parking lookups, official road-alert lookup when available, and ParkShare user-released parking spots from the active session. It does not fabricate parking stock or road alerts when live data is unavailable.
 
 ## MCP tools
 
