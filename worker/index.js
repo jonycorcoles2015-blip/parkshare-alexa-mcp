@@ -379,9 +379,10 @@ const pageScenarios = {
 };
 
 const page = `<!doctype html>
-<html lang="en">
+<html lang="es" class="notranslate" translate="no">
   <head>
     <meta charset="utf-8">
+    <meta name="google" content="notranslate">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>ParkShare Alexa+ MCP</title>
     <link
