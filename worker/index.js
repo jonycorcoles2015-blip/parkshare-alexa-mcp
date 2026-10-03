@@ -551,6 +551,60 @@ const page = `<!doctype html>
         border: 1px solid #b9d7ca;
         background: #f2faf6;
       }
+      .nearby-list {
+        border: 1px solid #ccd8d2;
+        background: #ffffff;
+      }
+      .nearby-results {
+        display: grid;
+        gap: 8px;
+      }
+      .nearby-card {
+        display: grid;
+        gap: 5px;
+        border: 1px solid #d6ddd9;
+        border-radius: 8px;
+        padding: 10px;
+        background: #f8fbf9;
+      }
+      .nearby-card strong { font-size: 15px; }
+      .nearby-card span {
+        color: #5d6963;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+      .nearby-badge {
+        justify-self: start;
+        border-radius: 999px;
+        padding: 3px 8px;
+        background: #dff3ea;
+        color: #18553b;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .route-question {
+        display: none;
+        gap: 10px;
+        border: 1px solid #b9d7ca;
+        border-radius: 8px;
+        padding: 12px;
+        background: #f2faf6;
+      }
+      .route-question p {
+        margin: 0;
+        color: #17211d;
+        font-weight: 800;
+      }
+      .route-question-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .secondary-button {
+        border: 1px solid #b9d7ca;
+        background: #f2faf6;
+        color: #18553b;
+      }
       .map {
         min-height: 390px;
         overflow: hidden;
@@ -596,6 +650,7 @@ const page = `<!doctype html>
       }
       @media (max-width: 560px) {
         .actions, .meta-grid, .coordinate-grid { grid-template-columns: 1fr; }
+        .route-question-actions { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -652,6 +707,21 @@ const page = `<!doctype html>
           <p id="assistantAnswer">Elige un escenario para probar ParkShare.</p>
         </section>
 
+        <section class="route-question" id="routeQuestion">
+          <p>Antes de iniciar la ruta, has dejado libre tu plaza anterior?</p>
+          <div class="route-question-actions">
+            <button id="confirmSpotFree" type="button">Si, liberar plaza</button>
+            <button class="secondary-button" id="declineSpotFree" type="button">No, solo guiarme</button>
+          </div>
+        </section>
+
+        <section class="nearby-list">
+          <h2>Sitios cercanos</h2>
+          <div class="nearby-results" id="nearbyResults">
+            <div class="result">Cuando hagas una busqueda cercana, apareceran aqui varias opciones ordenadas por distancia.</div>
+          </div>
+        </section>
+
         <section class="map" aria-label="Vista previa de ruta">
           <div id="map">
             <div class="map-placeholder">Elige un escenario cercano y permite ubicacion precisa para dibujar una ruta real.</div>
@@ -699,6 +769,10 @@ const page = `<!doctype html>
       const locationDiagnostics = document.querySelector("#locationDiagnostics");
       const steps = document.querySelector("#steps");
       const results = document.querySelector("#results");
+      const nearbyResults = document.querySelector("#nearbyResults");
+      const routeQuestion = document.querySelector("#routeQuestion");
+      const confirmSpotFree = document.querySelector("#confirmSpotFree");
+      const declineSpotFree = document.querySelector("#declineSpotFree");
       const rawResponse = document.querySelector("#rawResponse");
       const maxUsableBrowserAccuracyMeters = ${maxUsableBrowserAccuracyMeters};
       const browserLocationStorageKey = "parkshareDemoBrowserLocation";
@@ -710,7 +784,8 @@ const page = `<!doctype html>
       let map;
       let routeLayer;
       let driverMarker;
-      let placeMarker;
+      let placeMarkers = [];
+      let lastParkingPrompt = null;
       let cachedBrowserLocation = loadCachedBrowserLocation();
       let initialLocationRequestStarted = false;
       let lastPermissionState = "checking";
@@ -759,6 +834,78 @@ const page = `<!doctype html>
           node.append(strong, span);
           results.appendChild(node);
         });
+      }
+
+      function formatPlaceAvailabilityLabel(place) {
+        if (!place) return "horario no confirmado";
+        if (place.status === "likely_free") return "probablemente libre";
+        if (place.status === "unknown_but_likely") return "posible hueco";
+        if (place.status === "fallback") return "zona alternativa";
+        if (place.availability === "open") return "abierto ahora";
+        if (place.availability === "closed") return "puede estar cerrado";
+        return "horario no confirmado";
+      }
+
+      function renderNearbyResults(data) {
+        nearbyResults.replaceChildren();
+        const places = data && Array.isArray(data.results)
+          ? data.results
+          : data && Array.isArray(data.parkingLeads)
+            ? data.parkingLeads
+            : [];
+        if (!places.length) {
+          const empty = document.createElement("div");
+          empty.className = "result";
+          empty.textContent = "No hay sitios cercanos para mostrar todavia.";
+          nearbyResults.appendChild(empty);
+          return;
+        }
+
+        places.slice(0, 5).forEach((place, index) => {
+          const card = document.createElement("div");
+          card.className = "nearby-card";
+
+          if (index === 0) {
+            const badge = document.createElement("div");
+            badge.className = "nearby-badge";
+            badge.textContent = "Recomendado";
+            card.appendChild(badge);
+          }
+
+          const title = document.createElement("strong");
+          title.textContent = String(index + 1) + ". " + (place.name || place.label || "Sitio cercano");
+
+          const distance = document.createElement("span");
+          const distanceText = Number.isFinite(Number(place.distanceKm))
+            ? Number(place.distanceKm).toFixed(Number(place.distanceKm) < 1 ? 2 : 1) + " km"
+            : Number.isFinite(Number(place.distanceMeters))
+              ? Math.round(Number(place.distanceMeters)) + " m"
+              : "distancia no disponible";
+          const minutesText = place.driveMinutes ? formatMinutes(place.driveMinutes) : "tiempo no disponible";
+          distance.textContent = distanceText + " · " + minutesText + " · " + formatPlaceAvailabilityLabel(place);
+
+          const address = document.createElement("span");
+          address.textContent = place.address || place.reason || "Direccion no confirmada";
+
+          card.append(title, distance, address);
+          nearbyResults.appendChild(card);
+        });
+      }
+
+      function clearRouteQuestion() {
+        lastParkingPrompt = null;
+        routeQuestion.style.display = "none";
+      }
+
+      function renderRouteQuestion(data) {
+        const shouldAsk = data && data.requirePreviousSpotConfirmation === true;
+        if (!shouldAsk) {
+          clearRouteQuestion();
+          return;
+        }
+
+        lastParkingPrompt = data;
+        routeQuestion.style.display = "grid";
       }
 
       function getBrowserLocationOnce() {
@@ -1288,6 +1435,8 @@ const page = `<!doctype html>
           addMessage("driver", driverText);
         }
         addMessage("assistant", message);
+        renderNearbyResults(structuredContent);
+        renderRouteQuestion(structuredContent);
         renderStructured(structuredContent);
         rawResponse.textContent = JSON.stringify(data, null, 2);
       }
@@ -1525,8 +1674,11 @@ const page = `<!doctype html>
 
       async function addBrowserRouteIfNeeded(data) {
         const structured = data.structuredContent || data;
-        const origin = structured && structured.originCoordinates;
-        const destination = structured && structured.results && structured.results[0];
+        const origin = structured && (structured.originCoordinates || structured.destinationCoordinates);
+        const destination =
+          structured && structured.results && structured.results[0]
+            ? structured.results[0]
+            : structured && structured.parkingLeads && structured.parkingLeads[0];
 
         if (
           structured.route ||
@@ -1547,24 +1699,38 @@ const page = `<!doctype html>
       }
 
       function renderMap(data) {
-        const origin = data && data.originCoordinates;
-        const destination = data && data.results && data.results[0];
+        const origin = data && (data.originCoordinates || data.destinationCoordinates);
+        const resultList = data && Array.isArray(data.results)
+          ? data.results
+          : data && Array.isArray(data.parkingLeads)
+            ? data.parkingLeads
+            : [];
+        const destination = resultList[0];
         if (!origin || !destination || !destination.latitude || !destination.longitude) return;
         if (!ensureMap(origin.latitude, origin.longitude)) return;
 
         if (routeLayer) routeLayer.remove();
         if (driverMarker) driverMarker.remove();
-        if (placeMarker) placeMarker.remove();
+        placeMarkers.forEach((marker) => marker.remove());
+        placeMarkers = [];
 
         driverMarker = L.marker([origin.latitude, origin.longitude]).addTo(map).bindPopup("Tu ubicacion");
-        placeMarker = L.marker([destination.latitude, destination.longitude])
-          .addTo(map)
-          .bindPopup(destination.name || "Destino");
+        const mappedPlaces = resultList.slice(0, 5);
+        mappedPlaces.forEach((place, index) => {
+          if (!place || !place.latitude || !place.longitude) return;
+          const label = String(index + 1) + ". " + (place.name || place.label || "Destino");
+          const marker = L.marker([place.latitude, place.longitude])
+            .addTo(map)
+            .bindPopup(label);
+          placeMarkers.push(marker);
+        });
 
         if (!data.route || !Array.isArray(data.route.coordinates) || !data.route.coordinates.length) {
           const bounds = L.latLngBounds([
             [origin.latitude, origin.longitude],
-            [destination.latitude, destination.longitude]
+            ...mappedPlaces
+              .filter((place) => place && place.latitude && place.longitude)
+              .map((place) => [place.latitude, place.longitude])
           ]);
           map.fitBounds(bounds.pad(0.24));
           return;
@@ -1664,10 +1830,13 @@ const page = `<!doctype html>
 
           assistantAnswer.textContent = answer;
           addMessage("assistant", answer);
+          renderNearbyResults(data.structuredContent || data);
+          renderRouteQuestion(data.structuredContent || data);
           renderStructured(data.structuredContent || data);
           renderMap(data.structuredContent || data);
           rawResponse.textContent = JSON.stringify(data, null, 2);
         } catch (error) {
+          clearRouteQuestion();
           assistantAnswer.textContent =
             error && error.name === "AbortError"
               ? "La busqueda en directo ha tardado demasiado. Intentalo de nuevo o escribe una ciudad o direccion mas especifica."
@@ -1676,6 +1845,42 @@ const page = `<!doctype html>
           rawResponse.textContent = String(error && error.message ? error.message : error);
         } finally {
           document.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+        }
+      }
+
+      async function answerPreviousSpotQuestion(answer) {
+        if (!lastParkingPrompt) return;
+
+        const driverText = answer === "yes"
+          ? "Si, he dejado libre mi plaza anterior."
+          : "No, no la marques como libre.";
+        addMessage("driver", driverText);
+        routeQuestion.style.display = "none";
+        confirmSpotFree.disabled = true;
+        declineSpotFree.disabled = true;
+
+        try {
+          const coordinates = lastParkingPrompt.destinationCoordinates || lastParkingPrompt.originCoordinates || {};
+          const data = await fetchDemoResult("confirm_previous_spot_free", {
+            answer,
+            parkingSessionId: lastParkingPrompt.parkingSessionId || "demo-session",
+            latitude: coordinates.latitude,
+            longitude: coordinates.longitude
+          });
+          const answerText = data.content && data.content[0]
+            ? data.content[0].text
+            : "Respuesta registrada.";
+          assistantAnswer.textContent = answerText;
+          addMessage("assistant", answerText);
+          renderStructured(data.structuredContent || data);
+          rawResponse.textContent = JSON.stringify(data, null, 2);
+        } catch (error) {
+          routeQuestion.style.display = "grid";
+          assistantAnswer.textContent = "No pude registrar la respuesta de la plaza anterior. Intentalo otra vez.";
+          addMessage("assistant", assistantAnswer.textContent);
+        } finally {
+          confirmSpotFree.disabled = false;
+          declineSpotFree.disabled = false;
         }
       }
 
@@ -1688,8 +1893,12 @@ const page = `<!doctype html>
       });
 
       startLocationPermission.addEventListener("click", requestEntryLocationPermission);
+      confirmSpotFree.addEventListener("click", () => answerPreviousSpotQuestion("yes"));
+      declineSpotFree.addEventListener("click", () => answerPreviousSpotQuestion("no"));
 
       renderSteps(["Elige un escenario demo", "La pagina llamara a POST /demo", "Los clientes MCP siguen usando POST /mcp"]);
+      renderNearbyResults({});
+      clearRouteQuestion();
       renderStructured({});
       renderLocationDiagnostics();
       setLocationStatus("Pulsa Permitir ubicación al entrar para usar GPS real. Si este navegador no muestra el permiso nativo, escribe una dirección completa o coordenadas.");
@@ -3313,10 +3522,41 @@ async function findNearbyPlace(args) {
   };
 }
 
+function buildParkingLeadsForOrigin(args) {
+  const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+  if (!hasCoordinates) {
+    return demoParking;
+  }
+
+  const latitude = Number(args.latitude);
+  const longitude = Number(args.longitude);
+  const metersPerDegreeLatitude = 111320;
+  const metersPerDegreeLongitude = Math.max(1, 111320 * Math.cos(latitude * Math.PI / 180));
+  const offsets = [
+    { north: 120, east: -185 },
+    { north: -90, east: 400 },
+    { north: 520, east: -430 }
+  ];
+
+  return demoParking.map((lead, index) => {
+    const offset = offsets[index] || offsets[offsets.length - 1];
+    return {
+      ...lead,
+      name: lead.label,
+      distanceKm: Number((lead.distanceMeters / 1000).toFixed(2)),
+      driveMinutes: lead.walkingMinutes,
+      latitude: latitude + offset.north / metersPerDegreeLatitude,
+      longitude: longitude + offset.east / metersPerDegreeLongitude,
+      address: "Pista comunitaria ParkShare a " + lead.distanceMeters + " m"
+    };
+  });
+}
+
 function findParkingNearDestination(args) {
   const requireConfirmation = args.requirePreviousSpotConfirmation !== false;
-  const best = demoParking[0];
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+  const parkingLeads = buildParkingLeadsForOrigin(args);
+  const best = parkingLeads[0];
   const impreciseBrowserLocation = hasCoordinates && hasImpreciseBrowserLocation(args);
   const needsCurrentLocation =
     String(args.destination || "").toLowerCase().includes("current location") ||
@@ -3371,8 +3611,15 @@ function findParkingNearDestination(args) {
             longitude: Number(args.longitude)
           }
         : null,
+      originCoordinates: hasCoordinates
+        ? {
+            latitude: Number(args.latitude),
+            longitude: Number(args.longitude)
+          }
+        : null,
+      parkingSessionId: args.parkingSessionId || "demo-session",
       requirePreviousSpotConfirmation: requireConfirmation,
-      parkingLeads: demoParking
+      parkingLeads
     }
   };
 }
@@ -3477,7 +3724,9 @@ function confirmPreviousSpotFree(args) {
   if (args.answer === "yes") {
     return releaseParkingSpot({
       parkingSessionId: args.parkingSessionId,
-      confirmation: "driver_confirmed_free"
+      confirmation: "driver_confirmed_free",
+      latitude: args.latitude,
+      longitude: args.longitude
     });
   }
 
