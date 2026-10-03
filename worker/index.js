@@ -1440,18 +1440,6 @@ const page = `<!doctype html>
         structured.route = route;
         destination.driveDistanceKm = route.distanceKm;
         destination.driveMinutes = route.durationMinutes;
-
-        if (data.content && data.content[0]) {
-          const label = describeLocationForSpeech(
-            structured.locationSource,
-            structured.locationLabel || "tu ubicacion"
-          );
-          data.content[0].text =
-            "Usando " + label + ", encontre " + destination.name + ", " +
-            describeStructuredCategory(structured, destination) + "a unos " +
-            destination.distanceKm + " kilometros. El trayecto dura alrededor de " +
-            formatMinutes(route.durationMinutes) + "." + describeAvailabilityForSpeech(destination);
-        }
       }
 
       function renderMap(data) {
