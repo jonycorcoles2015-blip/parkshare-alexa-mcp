@@ -498,7 +498,7 @@ const page = `<!doctype html>
           </div>
           <label for="manualLocation">Approximate city or address</label>
           <input id="manualLocation" type="text" placeholder="Madrid, Zaragoza, London..." autocomplete="street-address">
-          <small>Leave these empty to request browser GPS for this search. If GPS is denied or this embedded browser cannot show the permission prompt, ParkShare falls back to an approximate IP/network location when available. Exact coordinates are the most precise option.</small>
+          <small>Leave these empty to request browser GPS for this search. IP/network location is not used for nearest-place results because it can be kilometers away. If GPS is unavailable, enter exact coordinates or a full address with city and country.</small>
         </section>
 
         <section>
@@ -634,89 +634,24 @@ const page = `<!doctype html>
         });
       }
 
-      function isValidLocation(latitude, longitude) {
-        return Number.isFinite(latitude) &&
-          Number.isFinite(longitude) &&
-          latitude >= -90 &&
-          latitude <= 90 &&
-          longitude >= -180 &&
-          longitude <= 180;
-      }
-
-      async function fetchJsonWithTimeout(url, timeoutMs) {
-        const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
-
-        try {
-          const response = await fetch(url, {
-            headers: { "accept": "application/json" },
-            signal: controller.signal
-          });
-          if (!response.ok) return null;
-          return response.json();
-        } catch (error) {
-          return null;
-        } finally {
-          window.clearTimeout(timeout);
-        }
-      }
-
-      async function getApproximateIpLocation() {
-        const providers = [
-          {
-            url: "https://ipapi.co/json/",
-            parse(data) {
-              const latitude = Number(data && data.latitude);
-              const longitude = Number(data && data.longitude);
-              if (!isValidLocation(latitude, longitude)) return null;
-              const label = [data.city, data.region, data.country_name || data.country]
-                .filter(Boolean)
-                .join(", ") || "approximate IP location";
-              return { latitude, longitude, label };
-            }
-          },
-          {
-            url: "https://ipwho.is/",
-            parse(data) {
-              if (data && data.success === false) return null;
-              const latitude = Number(data && data.latitude);
-              const longitude = Number(data && data.longitude);
-              if (!isValidLocation(latitude, longitude)) return null;
-              const label = [data.city, data.region, data.country]
-                .filter(Boolean)
-                .join(", ") || "approximate IP location";
-              return { latitude, longitude, label };
-            }
-          }
-        ];
-
-        for (const provider of providers) {
-          const data = await fetchJsonWithTimeout(provider.url, 6000);
-          const location = data ? provider.parse(data) : null;
-          if (location) return location;
-        }
-
-        return null;
-      }
-
       function getLocationFailureMessage(error) {
         if (error && error.code === "GEOLOCATION_UNSUPPORTED") {
-          return "This embedded browser cannot open the GPS permission prompt. Open the demo in Chrome/Safari, or enter exact coordinates before searching.";
+          return "This embedded browser cannot open the GPS permission prompt. Open the demo in Chrome/Safari, or enter exact coordinates or a full address before searching.";
         }
 
         if (error && error.code === 1) {
-          return "Location permission was denied. Allow browser location for this site, or enter exact coordinates before searching.";
+          return "Location permission was denied. Allow browser location for this site, or enter exact coordinates or a full address before searching.";
         }
 
         if (error && error.code === 2) {
-          return "The browser could not determine your current GPS position. Try again outside this embedded browser, or enter exact coordinates.";
+          return "The browser could not determine your current GPS position. Try again outside this embedded browser, or enter exact coordinates or a full address.";
         }
 
         if (error && error.code === 3) {
-          return "The GPS request timed out. Try again, open the demo in Chrome/Safari, or enter exact coordinates.";
+          return "The GPS request timed out. Try again, open the demo in Chrome/Safari, or enter exact coordinates or a full address.";
         }
 
-        return "Browser GPS was not available. Open the demo in Chrome/Safari, or enter exact coordinates before searching.";
+        return "Browser GPS was not available. Open the demo in Chrome/Safari, or enter exact coordinates or a full address before searching.";
       }
 
       function showMissingLocationResult(scenario, driverText, message) {
@@ -1037,31 +972,14 @@ const page = `<!doctype html>
                 addMessage("assistant", getLocationAcknowledgement(scenario, "browser"));
               } catch (locationError) {
                 driverText = getLocationDriverText(scenario, "browser");
-                assistantAnswer.textContent =
-                  "Precise GPS was not available. Trying approximate network location...";
-                addMessage("driver", driverText);
-                addMessage(
-                  "assistant",
-                  "Precise GPS was not available. I will try approximate network/IP location now."
+                args.locationSource = "missing_location";
+                args.gpsFallbackReason = getLocationFailureMessage(locationError);
+                showMissingLocationResult(
+                  scenario,
+                  driverText,
+                  getLocationFailureMessage(locationError)
                 );
-
-                const ipLocation = await getApproximateIpLocation();
-                if (ipLocation) {
-                  args.latitude = ipLocation.latitude;
-                  args.longitude = ipLocation.longitude;
-                  args.locationSource = "ip_approximate_location";
-                  args.locationLabel = ipLocation.label;
-                  assistantAnswer.textContent =
-                    "Using approximate IP/network location...";
-                  addMessage(
-                    "assistant",
-                    "I found an approximate IP/network location and will use it for this demo."
-                  );
-                } else {
-                  args.allowApproximateNetworkLocation = true;
-                  args.locationSource = "missing_location";
-                  args.gpsFallbackReason = getLocationFailureMessage(locationError);
-                }
+                return;
               }
             }
           } else {
@@ -1228,6 +1146,10 @@ async function handleDemo(request) {
         args.longitude = geocoded.longitude;
         args.locationSource = "manual_geocoded_location";
         args.locationLabel = geocoded.label;
+        args.geocoder = geocoded.geocoder;
+      } else {
+        args.locationSource = "manual_location_failed";
+        args.locationLabel = args.locationText.trim();
       }
     }
 
@@ -1380,9 +1302,44 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
 }
 
 async function geocodeLocationText(text) {
+  const queries = buildGeocodeQueries(text);
+
+  for (const query of queries) {
+    const nominatim = await geocodeWithNominatim(query);
+    if (nominatim) return nominatim;
+  }
+
+  for (const query of queries) {
+    const photon = await geocodeWithPhoton(query);
+    if (photon) return photon;
+  }
+
+  return null;
+}
+
+function buildGeocodeQueries(text) {
+  const cleaned = String(text || "").trim();
+  const lower = cleaned.toLowerCase();
+  const variants = [cleaned];
+  const mentionsCountry =
+    lower.includes(" españa") ||
+    lower.includes(",españa") ||
+    lower.includes(" spain") ||
+    lower.includes(",spain") ||
+    lower.endsWith(" es");
+
+  if (cleaned && !mentionsCountry) {
+    variants.push(`${cleaned}, España`);
+    variants.push(`${cleaned}, Spain`);
+  }
+
+  return [...new Set(variants.filter(Boolean))];
+}
+
+async function geocodeWithNominatim(query) {
   const url =
     `https://nominatim.openstreetmap.org/search?` +
-    `format=jsonv2&limit=1&q=${encodeURIComponent(text)}`;
+    `format=jsonv2&addressdetails=1&limit=5&countrycodes=es&q=${encodeURIComponent(query)}`;
   const data = await fetchJsonWithTimeout(url, {
     headers: {
       "accept": "application/json",
@@ -1390,11 +1347,14 @@ async function geocodeLocationText(text) {
     }
   }, geocodingTimeoutMs);
 
-  if (!data) {
+  if (!Array.isArray(data)) {
     return null;
   }
 
-  const best = data && data[0];
+  const best = data
+    .filter((result) => hasValidCoordinates(result.lat, result.lon))
+    .sort((a, b) => Number(b.importance || 0) - Number(a.importance || 0))[0];
+
   if (!best || !hasValidCoordinates(best.lat, best.lon)) {
     return null;
   }
@@ -1402,8 +1362,47 @@ async function geocodeLocationText(text) {
   return {
     latitude: Number(best.lat),
     longitude: Number(best.lon),
-    label: best.display_name || text
+    label: best.display_name || query,
+    geocoder: "nominatim"
   };
+}
+
+async function geocodeWithPhoton(query) {
+  const url =
+    `https://photon.komoot.io/api/?` +
+    `limit=5&q=${encodeURIComponent(query)}`;
+  const data = await fetchJsonWithTimeout(url, {
+    headers: {
+      "accept": "application/json"
+    }
+  }, geocodingTimeoutMs);
+
+  const features = Array.isArray(data?.features) ? data.features : [];
+  const best = features
+    .map((feature) => {
+      const coordinates = feature.geometry?.coordinates || [];
+      const longitude = Number(coordinates[0]);
+      const latitude = Number(coordinates[1]);
+      if (!hasValidCoordinates(latitude, longitude)) return null;
+      const properties = feature.properties || {};
+      const label = [
+        properties.name,
+        properties.street,
+        properties.housenumber,
+        properties.city || properties.county,
+        properties.state,
+        properties.country
+      ].filter(Boolean).join(", ");
+      return {
+        latitude,
+        longitude,
+        label: label || query,
+        geocoder: "photon"
+      };
+    })
+    .filter(Boolean)[0];
+
+  return best || null;
 }
 
 function getApproximateRequestLocation(request) {
@@ -1681,14 +1680,18 @@ async function findNearbyPlace(args) {
   if (isSupermarketSearch) {
     if (!hasCoordinates) {
       const fallbackAttempted = args.allowApproximateNetworkLocation === true;
+      const typedAddressFailed = args.locationSource === "manual_location_failed";
       return {
         spoken:
-          fallbackAttempted
+          typedAddressFailed
+            ? "I could not convert that typed address into coordinates. Please enter a fuller address with city and country, or use exact latitude and longitude."
+            : fallbackAttempted
             ? "I could not get precise GPS or an approximate network location. Please allow browser location, enter exact coordinates, or type a city or address as an approximate fallback."
             : "I do not have a usable start location yet. Please allow browser location, enter exact coordinates, or type a city or address as an approximate fallback.",
         data: {
           query: args.query,
-          locationSource: "missing_location",
+          locationSource: typedAddressFailed ? "manual_location_failed" : "missing_location",
+          locationLabel: typedAddressFailed ? args.locationLabel : undefined,
           needsLocation: true,
           networkFallbackAttempted: fallbackAttempted,
           results: []
@@ -1741,14 +1744,18 @@ function findParkingNearDestination(args) {
     String(args.destination || "").toLowerCase().includes("my location");
   if (needsCurrentLocation && !hasCoordinates) {
     const fallbackAttempted = args.allowApproximateNetworkLocation === true;
+    const typedAddressFailed = args.locationSource === "manual_location_failed";
     return {
       spoken:
-        fallbackAttempted
+        typedAddressFailed
+          ? "I could not convert that typed address into coordinates, so I cannot find nearby parking from it. Please enter a fuller address with city and country, or use exact latitude and longitude."
+          : fallbackAttempted
           ? "I could not get precise GPS or an approximate network location, so I cannot find nearby parking yet. Please allow browser location, enter exact coordinates, or type a city or address."
           : "I need your current location before I can find nearby parking. Please allow browser location, enter exact coordinates, or type a city or address.",
       data: {
         destination: args.destination,
-        locationSource: "missing_location",
+        locationSource: typedAddressFailed ? "manual_location_failed" : "missing_location",
+        locationLabel: typedAddressFailed ? args.locationLabel : undefined,
         needsLocation: true,
         networkFallbackAttempted: fallbackAttempted,
         parkingLeads: []
@@ -1793,14 +1800,18 @@ function getRoadAlerts(args) {
     String(args.origin || "").toLowerCase().includes("my location");
   if (needsCurrentLocation && !hasCoordinates) {
     const fallbackAttempted = args.allowApproximateNetworkLocation === true;
+    const typedAddressFailed = args.locationSource === "manual_location_failed";
     return {
       spoken:
-        fallbackAttempted
+        typedAddressFailed
+          ? "I could not convert that typed address into coordinates, so I cannot check road alerts from it. Please enter a fuller address with city and country, or use exact latitude and longitude."
+          : fallbackAttempted
           ? "I could not get precise GPS or an approximate network location, so I cannot check road alerts from your position yet. Please allow browser location, enter exact coordinates, or type a city or address."
           : "I need your current location before I can check road alerts. Please allow browser location, enter exact coordinates, or type a city or address.",
       data: {
         origin: args.origin || "current_location",
-        locationSource: "missing_location",
+        locationSource: typedAddressFailed ? "manual_location_failed" : "missing_location",
+        locationLabel: typedAddressFailed ? args.locationLabel : undefined,
         needsLocation: true,
         networkFallbackAttempted: fallbackAttempted,
         destination: args.destination,
