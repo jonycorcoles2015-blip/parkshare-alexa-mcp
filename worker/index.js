@@ -623,7 +623,7 @@ const page = `<!doctype html>
           <h2>Ubicacion de inicio</h2>
           <div class="location-gate" id="locationGate">
             <strong>GPS del navegador</strong>
-            <p>ParkShare pide la ubicación automáticamente al entrar. Si el navegador entrega una posición demasiado aproximada, no se usará para resultados cercanos; escribe dirección exacta o coordenadas.</p>
+            <p>ParkShare pide la ubicación automáticamente al entrar. Si Chrome concede permiso pero solo entrega una posición aproximada de red, no se usará para resultados cercanos; activa ubicación precisa en el dispositivo o escribe dirección exacta/coordenadas.</p>
             <button class="secondary-button" id="startLocationPermission" type="button">Reintentar GPS del navegador</button>
           </div>
           <label for="manualLatitude">Coordenadas exactas</label>
@@ -1121,7 +1121,7 @@ const page = `<!doctype html>
 
         locationDiagnostics.textContent = [
           "Diagnóstico GPS:",
-          "Versión visible: gps-watch-persistent-cache",
+          "Versión visible: gps-watch-device-hint",
           "HTTPS/contexto seguro: " + (secureContext ? "sí" : "no"),
           "API GPS del navegador: " + (hasGeoApi ? "sí" : "no"),
           "API de permisos: " + (hasPermissionsApi ? "sí" : "no"),
@@ -1250,7 +1250,7 @@ const page = `<!doctype html>
         if (error && error.code === "GEOLOCATION_TOO_IMPRECISE") {
           const accuracy = Number(error.accuracyMeters);
           const accuracyText = Number.isFinite(accuracy) ? Math.round(accuracy) + " m" : "demasiado baja";
-          return "He intentado obtener un GPS preciso varias veces y he esperado una lectura fina de Chrome, pero el navegador solo ha dado una ubicación demasiado aproximada (" + accuracyText + "). No la uso para buscar sitios cercanos porque puede mandarte a otro barrio o al centro de la ciudad. Escribe una dirección exacta o coordenadas.";
+          return "Chrome ha concedido el permiso, pero no está entregando GPS real: solo una ubicación aproximada de red (" + accuracyText + "). En un PC suele pasar porque no hay GPS; en Android activa Ubicación precisa para Chrome y Precisión de ubicación de Google. No la uso para buscar sitios cercanos porque puede mandarte a otro barrio. Para esta demo, escribe una dirección exacta o coordenadas.";
         }
 
         if (error && error.code === 1) {
