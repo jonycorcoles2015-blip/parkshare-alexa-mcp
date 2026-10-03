@@ -515,6 +515,17 @@ const page = `<!doctype html>
       .action-group summary::-webkit-details-marker { display: none; }
       .action-group summary::after { content: "+"; font-size: 20px; line-height: 1; }
       .action-group[open] summary::after { content: "−"; }
+      .action-group-label {
+        min-width: 0;
+        display: grid;
+        gap: 2px;
+      }
+      .action-group-label small {
+        color: #5d6963;
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1.25;
+      }
       .action-submenu {
         display: grid;
         gap: 8px;
@@ -2180,11 +2191,18 @@ const page = `<!doctype html>
         container.appendChild(button);
       }
 
-      function appendScenarioGroup(label, keys) {
+      function appendScenarioGroup(label, hint, keys) {
         const group = document.createElement("details");
         group.className = "action-group";
         const summary = document.createElement("summary");
-        summary.textContent = label;
+        const labelContainer = document.createElement("span");
+        labelContainer.className = "action-group-label";
+        const labelText = document.createElement("span");
+        labelText.textContent = label;
+        const hintText = document.createElement("small");
+        hintText.textContent = "(" + hint + ")";
+        labelContainer.append(labelText, hintText);
+        summary.appendChild(labelContainer);
         const submenu = document.createElement("div");
         submenu.className = "action-submenu";
         keys.forEach((key) => appendScenarioButton(submenu, key));
@@ -2192,10 +2210,18 @@ const page = `<!doctype html>
         actions.appendChild(group);
       }
 
-      appendScenarioGroup("Buscar un sitio cercano", ["supermarket", "fuel", "hotel"]);
+      appendScenarioGroup(
+        "Buscar un sitio cercano",
+        "supermercado, gasolinera, hotel o motel",
+        ["supermarket", "fuel", "hotel"]
+      );
       appendScenarioButton(actions, "parking");
       appendScenarioButton(actions, "alerts");
-      appendScenarioGroup("Crear aviso", ["reportControl", "reportAccident", "reportTraffic", "reportHazard"]);
+      appendScenarioGroup(
+        "Crear aviso",
+        "control, accidente, retencion u obstaculo",
+        ["reportControl", "reportAccident", "reportTraffic", "reportHazard"]
+      );
       appendScenarioButton(actions, "release");
 
       startLocationPermission.addEventListener("click", requestEntryLocationPermission);
