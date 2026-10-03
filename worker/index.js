@@ -691,6 +691,7 @@ const page = `<!doctype html>
       let driverMarker;
       let placeMarker;
       let cachedBrowserLocation = loadCachedBrowserLocation();
+      let initialLocationRequestStarted = false;
 
       function addMessage(className, text) {
         const node = document.createElement("div");
@@ -865,7 +866,7 @@ const page = `<!doctype html>
       }
 
       function getLocationPermissionPromptMessage() {
-        return "Permitir ubicación: si el navegador muestra el aviso, pulsa Permitir. Si este navegador embebido no enseña el aviso, abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
+        return "ParkShare está solicitando tu ubicación al navegador. Si aparece el aviso nativo, pulsa Permitir. Si no aparece, este navegador está bloqueando el permiso y debes abrir la demo en Chrome/Safari o usar dirección/coordenadas.";
       }
 
       async function requestBrowserLocationForSearch() {
@@ -908,13 +909,20 @@ const page = `<!doctype html>
 
       async function requestInitialBrowserLocation() {
         const state = await refreshLocationPermissionState();
-        if (state === "granted") {
-          try {
-            await requestBrowserLocationForSearch();
-            locationGate.style.display = "none";
-          } catch (error) {
-            setLocationStatus(getLocationFailureMessage(error));
-          }
+        if (!["granted", "prompt", "unknown"].includes(state) || initialLocationRequestStarted) {
+          return;
+        }
+
+        initialLocationRequestStarted = true;
+        try {
+          await requestBrowserLocationForSearch();
+          locationGate.style.display = "none";
+          manualLatitude.value = "";
+          manualLongitude.value = "";
+          manualLocation.value = "";
+        } catch (error) {
+          const latestState = await getGeolocationPermissionState();
+          setLocationStatus(getLocationFailureMessage(error, latestState));
         }
       }
 
@@ -925,7 +933,11 @@ const page = `<!doctype html>
         args.clientTimezoneOffsetMinutes = now.getTimezoneOffset();
       }
 
-      function getLocationFailureMessage(error) {
+      function getLocationFailureMessage(error, permissionState = null) {
+        if (permissionState === "denied") {
+          return "El permiso de ubicación está bloqueado para esta página. Actívalo en los permisos del sitio o escribe dirección exacta/coordenadas.";
+        }
+
         if (error && error.code === "GEOLOCATION_UNSUPPORTED") {
           return "Este navegador no puede abrir el aviso de permiso de ubicación. Abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
         }
@@ -935,7 +947,7 @@ const page = `<!doctype html>
         }
 
         if (error && error.code === 2) {
-          return "El navegador no pudo determinar tu posición GPS. Si aparece el aviso, pulsa Permitir. Si este navegador embebido no muestra el aviso, abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
+          return "La página ha pedido la ubicación, pero este navegador no pudo entregar GPS ni mostró un permiso utilizable. Abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
         }
 
         if (error && error.code === 3) {
