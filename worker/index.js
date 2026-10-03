@@ -85,8 +85,8 @@ const fallbackLocation = {
   source: "demo_montblanc_fallback"
 };
 
-const supermarketSearchRadiiMeters = [2500, 5000, 15000, 50000, 100000];
-const supermarketCandidateLimit = 20;
+const supermarketSearchRadiiMeters = [750, 1500, 2500, 5000, 15000, 50000, 100000];
+const supermarketCandidateLimit = 40;
 const routedCandidateLimit = 6;
 const geocodingTimeoutMs = 4500;
 const nominatimSearchTimeoutMs = 3500;
@@ -97,7 +97,61 @@ const overpassEndpoints = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter"
 ];
-const groceryShopValues = ["supermarket", "convenience", "greengrocer", "general"];
+const groceryShopValues = ["supermarket", "convenience", "greengrocer", "general", "department_store"];
+const livePlaceCategories = [
+  {
+    id: "supermarket",
+    singular: "supermarket",
+    plural: "supermarkets",
+    defaultName: "Supermarket",
+    aliases: ["supermarket", "supermercado", "grocery", "groceries", "alimentacion", "alimentación"],
+    filters: [{ key: "shop", values: groceryShopValues }],
+    nominatimQueries: ["supermarket", "grocery"]
+  },
+  {
+    id: "gas_station",
+    singular: "gas station",
+    plural: "gas stations",
+    defaultName: "Gas station",
+    aliases: ["gas station", "gasolinera", "gasolineras", "fuel", "petrol", "combustible"],
+    filters: [{ key: "amenity", values: ["fuel"] }],
+    nominatimQueries: ["gas station", "fuel"]
+  },
+  {
+    id: "hotel",
+    singular: "hotel or motel",
+    plural: "hotels and motels",
+    defaultName: "Hotel",
+    aliases: ["hotel", "hotels", "motel", "motels", "hostal", "alojamiento"],
+    filters: [{ key: "tourism", values: ["hotel", "motel", "hostel", "guest_house"] }],
+    nominatimQueries: ["hotel", "motel"]
+  },
+  {
+    id: "pharmacy",
+    singular: "pharmacy",
+    plural: "pharmacies",
+    defaultName: "Pharmacy",
+    aliases: ["pharmacy", "pharmacies", "farmacia", "farmacias"],
+    filters: [{ key: "amenity", values: ["pharmacy"] }],
+    nominatimQueries: ["pharmacy"]
+  },
+  {
+    id: "food",
+    singular: "place to eat",
+    plural: "places to eat",
+    defaultName: "Place to eat",
+    aliases: ["restaurant", "restaurants", "restaurante", "restaurantes", "food", "comida"],
+    filters: [{ key: "amenity", values: ["restaurant", "fast_food", "cafe"] }],
+    nominatimQueries: ["restaurant"]
+  }
+];
+
+function getLivePlaceCategory(query) {
+  const normalized = normalizeSearchText(query);
+  return livePlaceCategories.find((category) =>
+    category.aliases.some((alias) => normalized.includes(normalizeSearchText(alias)))
+  ) || null;
+}
 
 const toolDefinitions = [
   {
@@ -250,6 +304,34 @@ const pageScenarios = {
       "Search OpenStreetMap supermarkets around that point",
       "Rank results by closest mapped place",
       "Draw a route to the closest supermarket when routing is available"
+    ]
+  },
+  fuel: {
+    label: "Find gas station near me",
+    driver: "Alexa, ask ParkShare to find the nearest gas station from my location.",
+    tool: "find_nearby_place",
+    args: { query: "gas station", maxResults: 3 },
+    needsLocation: true,
+    context: "Fuel stop search from the active location",
+    steps: [
+      "Use browser, exact or typed driver location",
+      "Search OpenStreetMap fuel stops around that point",
+      "Rank gas stations by closest mapped place",
+      "Draw a route to the closest fuel stop when routing is available"
+    ]
+  },
+  hotel: {
+    label: "Find hotel/motel near me",
+    driver: "Alexa, ask ParkShare to find the nearest hotel or motel from my location.",
+    tool: "find_nearby_place",
+    args: { query: "hotel", maxResults: 3 },
+    needsLocation: true,
+    context: "Roadside rest search from the active location",
+    steps: [
+      "Use browser, exact or typed driver location",
+      "Search OpenStreetMap hotels and motels around that point",
+      "Rank places by closest mapped location",
+      "Draw a route to the closest stop when routing is available"
     ]
   },
   parking: {
@@ -515,13 +597,13 @@ const page = `<!doctype html>
             <input id="manualLatitude" type="text" inputmode="decimal" placeholder="Latitude">
             <input id="manualLongitude" type="text" inputmode="decimal" placeholder="Longitude">
           </div>
-          <label for="manualLocation">Approximate city or address</label>
-          <input id="manualLocation" type="text" placeholder="Madrid, Zaragoza, London..." autocomplete="street-address">
+          <label for="manualLocation">Exact address or city</label>
+          <input id="manualLocation" type="text" placeholder="Street and number, city, country" autocomplete="street-address">
           <div class="location-controls">
             <button class="secondary-button" id="useBrowserLocation" type="button">Use my browser location</button>
-            <div class="location-status" id="locationStatus">GPS is requested for every "near me" search unless exact coordinates or a typed address are provided.</div>
+            <div class="location-status" id="locationStatus">Press a "near me" scenario or this button to request browser GPS. If this embedded browser blocks the permission popup, enter an exact address or coordinates.</div>
           </div>
-          <small>Leave these empty to request browser GPS for this search. IP/network location is not used for nearest-place results because it can be kilometers away. If GPS is denied, enter exact coordinates or a full address with city and country.</small>
+          <small>Leave these empty to request browser GPS for this search. IP/network location is not used for nearest-place results because it can be kilometers away. If GPS is denied, enter exact coordinates or an address with enough city and country context.</small>
         </section>
 
         <section>
@@ -665,7 +747,7 @@ const page = `<!doctype html>
       }
 
       function getLocationPermissionPromptMessage() {
-        return "Allow location / Permitir ubicación: when the browser asks, choose Allow. ParkShare will use that GPS point for this demo session.";
+        return "Permitir ubicación: si el navegador muestra el aviso, pulsa Permitir. Si este navegador embebido no enseña el aviso, abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
       }
 
       async function requestBrowserLocationForSearch() {
@@ -694,22 +776,22 @@ const page = `<!doctype html>
 
       function getLocationFailureMessage(error) {
         if (error && error.code === "GEOLOCATION_UNSUPPORTED") {
-          return "This browser cannot open the location permission prompt. Open the demo in Chrome/Safari, or type your address or exact coordinates.";
+          return "Este navegador no puede abrir el aviso de permiso de ubicación. Abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
         }
 
         if (error && error.code === 1) {
-          return "Location permission was denied. Press Allow / Permitir ubicación when the browser asks, or type your address or exact coordinates.";
+          return "El permiso de ubicación fue denegado. Pulsa Permitir cuando el navegador lo pida o escribe dirección exacta/coordenadas.";
         }
 
         if (error && error.code === 2) {
-          return "The browser could not determine your GPS position. If the permission prompt appears, press Allow / Permitir ubicación. If no prompt appears in this embedded browser, type your address or exact coordinates.";
+          return "El navegador no pudo determinar tu posición GPS. Si aparece el aviso, pulsa Permitir. Si este navegador embebido no muestra el aviso, abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
         }
 
         if (error && error.code === 3) {
-          return "The GPS request timed out. Press Allow / Permitir ubicación if the browser asks, or type your address or exact coordinates.";
+          return "La petición GPS agotó el tiempo. Si aparece el aviso, pulsa Permitir. Si no aparece, abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
         }
 
-        return "Browser GPS was not available. Press Allow / Permitir ubicación if the browser asks, or type your address or exact coordinates. IP/network location is not used because it can be wrong by kilometers.";
+        return "El GPS del navegador no está disponible. Pulsa Permitir si el navegador lo pide, o escribe dirección exacta/coordenadas. No uso IP/red porque puede fallar por kilómetros.";
       }
 
       function showMissingLocationResult(scenario, driverText, message, driverAlreadyAdded = false) {
@@ -847,7 +929,7 @@ const page = `<!doctype html>
           return "Searching " + target + " from the exact coordinates you entered...";
         }
         if (source === "typed") {
-          return "Searching " + target + " from the approximate typed place...";
+          return "Searching " + target + " from the typed address...";
         }
         return "Searching " + target + " near this location...";
       }
@@ -864,7 +946,7 @@ const page = `<!doctype html>
           return "I will search " + target + " from the exact coordinates you entered.";
         }
         if (source === "typed") {
-          return "I will search " + target + " from the typed city or address as an approximate starting point.";
+          return "I will search " + target + " from the address or city you typed.";
         }
         return "Location allowed. Searching " + target + " now.";
       }
@@ -874,7 +956,7 @@ const page = `<!doctype html>
         if (source === "cached_browser_geolocation") return "your saved browser location from this session";
         if (source === "typed_coordinates") return "the exact coordinates you entered";
         if (source === "manual_geocoded_location" || source === "manual_location_text") {
-          return "the approximate typed place " + label;
+          return "the typed address " + label;
         }
         if (source === "network_approximate_location" || source === "ip_approximate_location") {
           return "your approximate network location";
@@ -1391,7 +1473,7 @@ function describeStartLocation(source, label) {
   }
 
   if (source === "manual_geocoded_location" || source === "manual_location_text") {
-    return `the approximate typed place ${label}`;
+    return `the typed address ${label}`;
   }
 
   if (source === "network_approximate_location" || source === "ip_approximate_location") {
@@ -1424,6 +1506,10 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
 }
 
 async function geocodeLocationText(text, biasHint = null) {
+  if (needsLocationContextForTypedAddress(text, biasHint)) {
+    return null;
+  }
+
   const queries = buildGeocodeQueries(text);
 
   for (const query of queries) {
@@ -1472,6 +1558,41 @@ function buildSpanishStreetQueryVariants(text) {
   return [`${prefix} de ${rest}`];
 }
 
+function needsLocationContextForTypedAddress(text, biasHint = null) {
+  const normalized = normalizeSearchText(text);
+  if (!normalized) return true;
+  if (biasHint) return false;
+  if (getCountryConstraint(text, null) || getLocalityHint(text)) return false;
+
+  const looksLikeStreet =
+    /\b(calle|avenida|avda|paseo|plaza|carretera|camino|ronda|trav[eé]s[ií]a|carrer|street|road|avenue)\b/i.test(text);
+  return looksLikeStreet;
+}
+
+function typedQueryHasHouseNumber(text) {
+  return extractTypedHouseNumber(text) !== null;
+}
+
+function extractTypedHouseNumber(text) {
+  const raw = String(text || "").trim();
+  const commaNumber = raw.match(/\b(calle|avenida|avda\.?|paseo|plaza|carretera|camino|ronda|trav[eé]s[ií]a|carrer|street|road|avenue)\b[^,]*[a-záéíóúñ][^,]*,\s*(\d+[a-z]?)/i);
+  if (commaNumber) return normalizeHouseNumber(commaNumber[2]);
+
+  const trailingNumber = raw.match(/\b(calle|avenida|avda\.?|paseo|plaza|carretera|camino|ronda|trav[eé]s[ií]a|carrer|street|road|avenue)\b\s+(.+?)\s+(\d+[a-z]?)(?=,|\s+(?:zaragoza|madrid|barcelona|valencia|malaga|málaga|sevilla|santander|montblanc|españa|espana|spain|colombia)\b|$)/i);
+  if (trailingNumber && /[a-záéíóúñ]/i.test(trailingNumber[2])) {
+    return normalizeHouseNumber(trailingNumber[3]);
+  }
+
+  return null;
+}
+
+function normalizeHouseNumber(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/^0+/, "");
+}
+
 async function geocodeWithNominatim(query, biasHint = null) {
   const localityHint = getLocalityHint(query) || biasHint;
   const countryConstraint = getCountryConstraint(query, localityHint);
@@ -1497,7 +1618,8 @@ async function geocodeWithNominatim(query, biasHint = null) {
     .filter((result) =>
       hasValidCoordinates(result.lat, result.lon) &&
       resultMatchesCountry(result, countryConstraint) &&
-      resultMatchesLocality(result, localityHint)
+      resultMatchesLocality(result, localityHint) &&
+      resultMatchesAddressPrecision(result, query)
     )
     .sort((a, b) => scoreGeocodeResult(b, localityHint) - scoreGeocodeResult(a, localityHint))[0];
 
@@ -1509,11 +1631,17 @@ async function geocodeWithNominatim(query, biasHint = null) {
     latitude: Number(best.lat),
     longitude: Number(best.lon),
     label: best.display_name || query,
-    geocoder: "nominatim"
+    geocoder: "nominatim",
+    precision: getNominatimPrecision(best),
+    address: best.address || {}
   };
 }
 
 async function geocodeWithPhoton(query, biasHint = null) {
+  if (typedQueryHasHouseNumber(query)) {
+    return null;
+  }
+
   const localityHint = getLocalityHint(query) || biasHint;
   const countryConstraint = getCountryConstraint(query, localityHint);
   const url =
@@ -1572,6 +1700,11 @@ async function geocodeWithPhoton(query, biasHint = null) {
 
 function getLocalityHint(query) {
   const lower = String(query || "").toLowerCase();
+  const normalized = normalizeSearchText(query);
+  if (normalized.includes(" colombia") || normalized.includes(",colombia")) {
+    return null;
+  }
+
   const hints = [
     { names: ["zaragoza"], latitude: 41.652134, longitude: -0.880943, radiusMeters: 30000, countryCodes: ["es"] },
     { names: ["madrid"], latitude: 40.416775, longitude: -3.70379, radiusMeters: 35000, countryCodes: ["es"] },
@@ -1588,15 +1721,6 @@ function getLocalityHint(query) {
 
 function getCountryConstraint(query, localityHint) {
   const lower = normalizeSearchText(query);
-  if (localityHint?.countryCodes?.length) {
-    return {
-      codes: localityHint.countryCodes,
-      names: localityHint.countryCodes.includes("es")
-        ? ["espana", "españa", "spain"]
-        : localityHint.countryCodes
-    };
-  }
-
   if (
     lower.includes(" espana") ||
     lower.includes(",espana") ||
@@ -1613,6 +1737,15 @@ function getCountryConstraint(query, localityHint) {
     return { codes: ["co"], names: ["colombia", "co"] };
   }
 
+  if (localityHint?.countryCodes?.length) {
+    return {
+      codes: localityHint.countryCodes,
+      names: localityHint.countryCodes.includes("es")
+        ? ["espana", "españa", "spain"]
+        : localityHint.countryCodes
+    };
+  }
+
   return null;
 }
 
@@ -1621,6 +1754,22 @@ function normalizeSearchText(text) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+function resultMatchesAddressPrecision(result, query) {
+  const expectedHouseNumber = extractTypedHouseNumber(query);
+  if (!expectedHouseNumber) return true;
+
+  const actualHouseNumber = normalizeHouseNumber(result.address?.house_number);
+  return actualHouseNumber === expectedHouseNumber;
+}
+
+function getNominatimPrecision(result) {
+  const address = result.address || {};
+  if (address.house_number) return "house";
+  if (address.road || address.pedestrian || address.square) return "street";
+  if (address.city || address.town || address.village || address.municipality) return "locality";
+  return result.type || "place";
 }
 
 function resultMatchesCountry(result, countryConstraint) {
@@ -1704,7 +1853,7 @@ function formatAddress(tags = {}) {
     .join(" ");
 }
 
-function placeFromOsmElement(element, origin) {
+function placeFromOsmElement(element, origin, category = livePlaceCategories[0]) {
   const tags = element.tags || {};
   const latitude = element.type === "node" ? element.lat : element.center?.lat;
   const longitude = element.type === "node" ? element.lon : element.center?.lon;
@@ -1714,12 +1863,12 @@ function placeFromOsmElement(element, origin) {
   }
 
   const distanceKm = haversineKm(origin, { latitude, longitude });
-  const name = tags.name || tags.brand || "Supermarket";
+  const name = tags.name || tags.brand || tags.operator || category.defaultName;
 
   return {
-    id: `osm-${element.type}-${element.id}`,
+    id: `osm-${category.id}-${element.type}-${element.id}`,
     name,
-    type: tags.shop || "supermarket",
+    type: tags.shop || tags.amenity || tags.tourism || category.id,
     distanceKm: Number(distanceKm.toFixed(2)),
     driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
     address: formatAddress(tags) || tags.operator || tags.brand || "OpenStreetMap location",
@@ -1745,21 +1894,21 @@ function viewboxForRadius(origin, radiusMeters) {
     .join(",");
 }
 
-function placeFromNominatimResult(result, origin) {
+function placeFromNominatimResult(result, origin, category = livePlaceCategories[0]) {
   if (!hasValidCoordinates(result.lat, result.lon)) {
     return null;
   }
 
   const latitude = Number(result.lat);
   const longitude = Number(result.lon);
-  const displayName = result.display_name || "OpenStreetMap supermarket";
-  const name = result.name || displayName.split(",")[0] || "Supermarket";
+  const displayName = result.display_name || `OpenStreetMap ${category.singular}`;
+  const name = result.name || displayName.split(",")[0] || category.defaultName;
   const distanceKm = haversineKm(origin, { latitude, longitude });
 
   return {
-    id: `nominatim-${result.osm_type || "place"}-${result.osm_id || result.place_id}`,
+    id: `nominatim-${category.id}-${result.osm_type || "place"}-${result.osm_id || result.place_id}`,
     name,
-    type: "supermarket",
+    type: category.id,
     distanceKm: Number(distanceKm.toFixed(2)),
     driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
     address: displayName,
@@ -1770,57 +1919,68 @@ function placeFromNominatimResult(result, origin) {
   };
 }
 
-async function fetchNominatimSupermarkets(origin, maxResults) {
+async function fetchNominatimPlaces(origin, category, maxResults) {
   for (const radius of supermarketSearchRadiiMeters) {
-    const params = new URLSearchParams({
-      format: "jsonv2",
-      limit: String(Math.min(Math.max(maxResults * 4, 12), 25)),
-      q: "supermarket",
-      bounded: "1",
-      viewbox: viewboxForRadius(origin, radius)
-    });
-    const data = await fetchJsonWithTimeout(
-      `https://nominatim.openstreetmap.org/search?${params.toString()}`,
-      {
-        headers: {
-          "accept": "application/json",
-          "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
-        }
-      },
-      nominatimSearchTimeoutMs
-    );
-    const results = (data || [])
-      .map((result) => placeFromNominatimResult(result, origin))
-      .filter(Boolean)
-      .sort((a, b) => a.distanceKm - b.distanceKm)
-      .slice(0, maxResults);
+    for (const term of category.nominatimQueries) {
+      const params = new URLSearchParams({
+        format: "jsonv2",
+        limit: String(Math.min(Math.max(maxResults * 4, 12), 25)),
+        q: term,
+        bounded: "1",
+        viewbox: viewboxForRadius(origin, radius)
+      });
+      const data = await fetchJsonWithTimeout(
+        `https://nominatim.openstreetmap.org/search?${params.toString()}`,
+        {
+          headers: {
+            "accept": "application/json",
+            "user-agent": "ParkShare-Alexa-MCP-Demo/0.1"
+          }
+        },
+        nominatimSearchTimeoutMs
+      );
+      const results = (data || [])
+        .map((result) => placeFromNominatimResult(result, origin, category))
+        .filter(Boolean)
+        .sort((a, b) => a.distanceKm - b.distanceKm)
+        .slice(0, maxResults);
 
-    if (results.length) {
-      return { radiusMeters: radius, results };
+      if (results.length) {
+        return { radiusMeters: radius, results };
+      }
     }
   }
 
   return null;
 }
 
-async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
+async function fetchNominatimSupermarkets(origin, maxResults) {
+  return fetchNominatimPlaces(origin, livePlaceCategories[0], maxResults);
+}
+
+function buildOverpassCategoryQuery(category, radius, origin, rawResultLimit) {
+  const filters = category.filters
+    .map((filter) => {
+      const valueRegex = `^(${filter.values.join("|")})$`;
+      return `nwr["${filter.key}"~"${valueRegex}"](around:${radius},${origin.latitude},${origin.longitude});`;
+    })
+    .join("\n");
+
+  return `
+    [out:json][timeout:8];
+    (
+      ${filters}
+    );
+    out center tags ${rawResultLimit};
+  `;
+}
+
+async function fetchOpenStreetMapPlaces(origin, category, maxResults) {
   const startedAt = Date.now();
   const rawResultLimit = Math.min(Math.max(maxResults * 4, 12), 25);
 
   for (const radius of supermarketSearchRadiiMeters) {
-    const shopFilters = groceryShopValues
-      .map((shop) => `
-        node["shop"="${shop}"](around:${radius},${origin.latitude},${origin.longitude});
-        way["shop"="${shop}"](around:${radius},${origin.latitude},${origin.longitude});
-        relation["shop"="${shop}"](around:${radius},${origin.latitude},${origin.longitude});`)
-      .join("");
-    const query = `
-      [out:json][timeout:12];
-      (
-        ${shopFilters}
-      );
-      out center tags ${rawResultLimit};
-    `;
+    const query = buildOverpassCategoryQuery(category, radius, origin, rawResultLimit);
     for (const endpoint of overpassEndpoints) {
       const remainingMs = overpassOverallTimeoutMs - (Date.now() - startedAt);
       if (remainingMs < 1000) {
@@ -1838,7 +1998,7 @@ async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
       );
 
       const results = (data?.elements || [])
-        .map((element) => placeFromOsmElement(element, origin))
+        .map((element) => placeFromOsmElement(element, origin, category))
         .filter(Boolean)
         .sort((a, b) => a.distanceKm - b.distanceKm)
         .slice(0, maxResults);
@@ -1850,6 +2010,10 @@ async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
   }
 
   return null;
+}
+
+async function fetchOpenStreetMapSupermarkets(origin, maxResults) {
+  return fetchOpenStreetMapPlaces(origin, livePlaceCategories[0], maxResults);
 }
 
 function placeDedupeKey(place) {
@@ -1888,10 +2052,14 @@ function mergePlaceResults(groups, maxResults) {
 }
 
 async function fetchLiveSupermarketCandidates(origin, maxResults) {
+  return fetchLivePlaceCandidates(origin, livePlaceCategories[0], maxResults);
+}
+
+async function fetchLivePlaceCandidates(origin, category, maxResults) {
   const candidateLimit = Math.max(maxResults, supermarketCandidateLimit);
   const lookups = await Promise.allSettled([
-    fetchNominatimSupermarkets(origin, candidateLimit),
-    fetchOpenStreetMapSupermarkets(origin, candidateLimit)
+    fetchNominatimPlaces(origin, category, candidateLimit),
+    fetchOpenStreetMapPlaces(origin, category, candidateLimit)
   ]);
   const groups = lookups
     .filter((result) => result.status === "fulfilled")
@@ -1992,15 +2160,15 @@ async function fetchDrivingRoute(origin, destination) {
 async function findNearbyPlace(args) {
   const query = String(args.query || "").toLowerCase();
   const maxResults = Math.min(Math.max(Number(args.maxResults || 3), 1), 5);
-  const isSupermarketSearch = query.includes("supermarket");
+  const liveCategory = getLivePlaceCategory(query);
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
 
-  if (isSupermarketSearch && hasCoordinates) {
+  if (liveCategory && hasCoordinates) {
     const origin = {
       latitude: Number(args.latitude),
       longitude: Number(args.longitude)
     };
-    const live = await fetchLiveSupermarketCandidates(origin, maxResults);
+    const live = await fetchLivePlaceCandidates(origin, liveCategory, maxResults);
 
     if (live?.results?.length) {
       const ranked = await rankSupermarketsByPracticalRoute(origin, live.results, maxResults);
@@ -2015,10 +2183,11 @@ async function findNearbyPlace(args) {
       return {
         spoken:
           `Using ${describeStartLocation(source, label)}, ` +
-          `I found ${best.name}, about ${best.distanceKm} kilometers away. ` +
+          `I found ${best.name}, the nearest ${liveCategory.singular}, about ${best.distanceKm} kilometers away. ` +
           `The drive is around ${formatMinutes(best.driveMinutes)}.`,
         data: {
           query: args.query,
+          category: liveCategory.id,
           locationSource: source,
           locationLabel: label,
           accuracyMeters: args.accuracyMeters || null,
@@ -2031,19 +2200,20 @@ async function findNearbyPlace(args) {
     }
   }
 
-  if (isSupermarketSearch) {
+  if (liveCategory) {
     if (!hasCoordinates) {
       const fallbackAttempted = args.allowApproximateNetworkLocation === true;
       const typedAddressFailed = args.locationSource === "manual_location_failed";
       return {
         spoken:
           typedAddressFailed
-            ? "I could not convert that typed address into coordinates. Please enter a fuller address with city and country, or use exact latitude and longitude."
+            ? "I could not convert that typed address into trustworthy coordinates. Please enter a fuller address with city and country, or use exact latitude and longitude."
             : fallbackAttempted
-            ? "I could not get a trustworthy start location. Please allow browser GPS, enter exact coordinates, or type a full address with city and country."
-            : "I do not have a usable start location yet. Please allow browser GPS, enter exact coordinates, or type a full address with city and country.",
+            ? "I could not get a trustworthy start location. Please allow browser GPS, enter exact coordinates, or type an address with enough city and country context."
+            : "I do not have a usable start location yet. Please allow browser GPS, enter exact coordinates, or type an address with enough city and country context.",
         data: {
           query: args.query,
+          category: liveCategory.id,
           locationSource: typedAddressFailed ? "manual_location_failed" : "missing_location",
           locationLabel: typedAddressFailed ? args.locationLabel : undefined,
           needsLocation: true,
@@ -2055,9 +2225,10 @@ async function findNearbyPlace(args) {
 
     return {
       spoken:
-        "I could not confirm live supermarkets near that location right now. I will not use the Montblanc fallback because this scenario must be based on the judge's real location.",
+        `I could not confirm live ${liveCategory.plural} near that location right now. I will not use a fake fallback because this scenario must be based on the real start point.`,
       data: {
         query: args.query,
+        category: liveCategory.id,
         locationSource: args.locationSource || "provided_coordinates",
         locationLabel: args.locationLabel || "provided location",
         originCoordinates: {
