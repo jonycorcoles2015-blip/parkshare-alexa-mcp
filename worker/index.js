@@ -619,9 +619,9 @@ const page = `<!doctype html>
         <section class="fallback-location">
           <h2>Start location</h2>
           <div class="location-gate" id="locationGate">
-            <strong>Permitir ubicación para esta demo</strong>
-            <p>ParkShare necesita tu GPS real para buscar sitios cercanos con precisión. Pulsa el botón y acepta el aviso nativo del navegador. Si este navegador no muestra el aviso, abre la URL en Chrome/Safari o usa coordenadas exactas.</p>
-            <button class="secondary-button" id="startLocationPermission" type="button">Permitir ubicación</button>
+            <strong>GPS del navegador</strong>
+            <p>ParkShare pide la ubicación automáticamente al entrar. Si el permiso ya está concedido pero aparece POSITION_UNAVAILABLE, este navegador no está entregando coordenadas GPS; prueba Chrome/Safari o usa dirección/coordenadas.</p>
+            <button class="secondary-button" id="startLocationPermission" type="button">Reintentar GPS del navegador</button>
           </div>
           <label for="manualLatitude">Exact coordinates</label>
           <div class="coordinate-grid">
@@ -631,7 +631,6 @@ const page = `<!doctype html>
           <label for="manualLocation">Exact address or city</label>
           <input id="manualLocation" type="text" placeholder="Street and number, city, country" autocomplete="street-address">
           <div class="location-controls">
-            <button class="secondary-button" id="useBrowserLocation" type="button">Usar ubicación GPS</button>
             <div class="location-status" id="locationStatus">Press a "near me" scenario or this button to request browser GPS. If this embedded browser blocks the permission popup, enter an exact address or coordinates.</div>
           </div>
           <div class="location-diagnostics" id="locationDiagnostics">Diagnóstico GPS: comprobando navegador...</div>
@@ -691,7 +690,6 @@ const page = `<!doctype html>
       const manualLocation = document.querySelector("#manualLocation");
       const manualLatitude = document.querySelector("#manualLatitude");
       const manualLongitude = document.querySelector("#manualLongitude");
-      const useBrowserLocation = document.querySelector("#useBrowserLocation");
       const startLocationPermission = document.querySelector("#startLocationPermission");
       const locationGate = document.querySelector("#locationGate");
       const locationStatus = document.querySelector("#locationStatus");
@@ -855,7 +853,7 @@ const page = `<!doctype html>
         }
 
         if (state === "granted") {
-          setLocationStatus("El navegador ya tiene permiso de ubicación. Pulsa un escenario o Usar ubicación GPS para tomar el punto actual.");
+          setLocationStatus("El permiso de ubicación está concedido. Si el último error es POSITION_UNAVAILABLE, el navegador no consigue entregar coordenadas GPS.");
           return;
         }
 
@@ -998,7 +996,8 @@ const page = `<!doctype html>
       }
 
       function getLocationFailureMessage(error, permissionState = null) {
-        if (permissionState === "denied") {
+        const effectivePermissionState = permissionState || lastPermissionState;
+        if (effectivePermissionState === "denied") {
           return "El permiso de ubicación está bloqueado para esta página. Actívalo en los permisos del sitio o escribe dirección exacta/coordenadas.";
         }
 
@@ -1011,6 +1010,9 @@ const page = `<!doctype html>
         }
 
         if (error && error.code === 2) {
+          if (effectivePermissionState === "granted") {
+            return "El permiso de ubicación está concedido, pero este navegador no entrega coordenadas GPS (POSITION_UNAVAILABLE). No es un problema de botones ni de cookies: prueba Chrome/Safari o escribe una dirección/coordenadas.";
+          }
           return "La página ha pedido la ubicación, pero este navegador no pudo entregar GPS ni mostró un permiso utilizable. Abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
         }
 
@@ -1440,22 +1442,6 @@ const page = `<!doctype html>
         actions.appendChild(button);
       });
 
-      useBrowserLocation.addEventListener("click", async () => {
-        useBrowserLocation.disabled = true;
-        try {
-          await refreshLocationPermissionState();
-          await requestBrowserLocationForSearch();
-          locationGate.style.display = "none";
-          manualLatitude.value = "";
-          manualLongitude.value = "";
-          manualLocation.value = "";
-        } catch (error) {
-          setLocationStatus(getLocationFailureMessage(error));
-          await refreshLocationPermissionState();
-        } finally {
-          useBrowserLocation.disabled = false;
-        }
-      });
       startLocationPermission.addEventListener("click", requestEntryLocationPermission);
 
       renderSteps(["Choose a demo scenario", "The page will call POST /demo", "MCP clients keep using POST /mcp"]);
