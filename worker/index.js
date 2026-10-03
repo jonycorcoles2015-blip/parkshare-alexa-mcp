@@ -32,7 +32,7 @@ const demoPlaces = [
 
 const demoParking = [
   {
-    id: "parking-mercadona-east",
+    id: "parking-active-primary",
     label: "Free street parking lead",
     distanceMeters: 230,
     confidence: "fresh-community-signal",
@@ -40,7 +40,7 @@ const demoParking = [
     status: "likely_free"
   },
   {
-    id: "parking-mercadona-north",
+    id: "parking-active-secondary",
     label: "Second practical option",
     distanceMeters: 410,
     confidence: "recent-area-signal",
@@ -48,7 +48,7 @@ const demoParking = [
     status: "unknown_but_likely"
   },
   {
-    id: "parking-mercadona-wide",
+    id: "parking-active-wide-area",
     label: "Wider fallback area",
     distanceMeters: 690,
     confidence: "low-density-area",
