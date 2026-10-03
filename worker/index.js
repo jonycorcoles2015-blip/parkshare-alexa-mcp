@@ -473,6 +473,17 @@ const page = `<!doctype html>
         font-size: 13px;
         line-height: 1.35;
       }
+      .location-diagnostics {
+        margin-top: 4px;
+        padding: 10px 12px;
+        border: 1px solid #cfe5da;
+        border-radius: 8px;
+        background: #eef8f3;
+        color: #183d2c;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre-line;
+      }
       .location-gate {
         display: grid;
         gap: 8px;
@@ -597,7 +608,7 @@ const page = `<!doctype html>
             the route on a real map. MCP clients use <code>POST /mcp</code>; this browser demo calls
             <code>POST /demo</code>, backed by the same ParkShare tool functions.
           </p>
-          <div class="status">MCP endpoint live</div>
+          <div class="status">MCP endpoint live · GPS diagnostics</div>
         </section>
 
         <section>
@@ -623,6 +634,7 @@ const page = `<!doctype html>
             <button class="secondary-button" id="useBrowserLocation" type="button">Usar ubicación GPS</button>
             <div class="location-status" id="locationStatus">Press a "near me" scenario or this button to request browser GPS. If this embedded browser blocks the permission popup, enter an exact address or coordinates.</div>
           </div>
+          <div class="location-diagnostics" id="locationDiagnostics">Diagnóstico GPS: comprobando navegador...</div>
           <small>Leave these empty to request browser GPS for this search. IP/network location is not used for nearest-place results because it can be kilometers away. If GPS is denied, enter exact coordinates or an address with enough city and country context.</small>
         </section>
 
@@ -683,6 +695,7 @@ const page = `<!doctype html>
       const startLocationPermission = document.querySelector("#startLocationPermission");
       const locationGate = document.querySelector("#locationGate");
       const locationStatus = document.querySelector("#locationStatus");
+      const locationDiagnostics = document.querySelector("#locationDiagnostics");
       const steps = document.querySelector("#steps");
       const results = document.querySelector("#results");
       const rawResponse = document.querySelector("#rawResponse");
@@ -692,6 +705,8 @@ const page = `<!doctype html>
       let placeMarker;
       let cachedBrowserLocation = loadCachedBrowserLocation();
       let initialLocationRequestStarted = false;
+      let lastPermissionState = "checking";
+      let lastLocationError = null;
 
       function addMessage(className, text) {
         const node = document.createElement("div");
@@ -795,14 +810,20 @@ const page = `<!doctype html>
 
       async function getGeolocationPermissionState() {
         if (typeof window !== "undefined" && window.isSecureContext === false) {
+          lastPermissionState = "blocked_not_secure";
+          renderLocationDiagnostics();
           return "blocked_not_secure";
         }
 
         if (typeof navigator === "undefined" || !navigator.geolocation) {
+          lastPermissionState = "unavailable";
+          renderLocationDiagnostics();
           return "unavailable";
         }
 
         if (!navigator.permissions || !navigator.permissions.query) {
+          lastPermissionState = "unknown";
+          renderLocationDiagnostics();
           return "unknown";
         }
 
@@ -811,13 +832,19 @@ const page = `<!doctype html>
           status.onchange = () => {
             updateLocationStatusForPermissionState(status.state);
           };
+          lastPermissionState = status.state || "unknown";
+          renderLocationDiagnostics();
           return status.state || "unknown";
         } catch (error) {
+          lastPermissionState = "unknown";
+          renderLocationDiagnostics();
           return "unknown";
         }
       }
 
       function updateLocationStatusForPermissionState(state) {
+        lastPermissionState = state || "unknown";
+        renderLocationDiagnostics();
         if (cachedBrowserLocation) {
           setLocationStatus(
             "GPS guardado para esta sesión. Precisión aproximada: " +
@@ -865,6 +892,39 @@ const page = `<!doctype html>
         locationStatus.textContent = text;
       }
 
+      function renderLocationDiagnostics() {
+        const secureContext = typeof window !== "undefined" && window.isSecureContext !== false;
+        const hasGeoApi = typeof navigator !== "undefined" && Boolean(navigator.geolocation);
+        const hasPermissionsApi = typeof navigator !== "undefined" &&
+          Boolean(navigator.permissions && navigator.permissions.query);
+        const cachedText = cachedBrowserLocation
+          ? "sí, precisión " + Math.round(cachedBrowserLocation.accuracyMeters || 0) + " m"
+          : "no";
+        const errorText = lastLocationError
+          ? getReadableGeolocationError(lastLocationError)
+          : "sin error todavía";
+
+        locationDiagnostics.textContent = [
+          "Diagnóstico GPS:",
+          "Versión visible: gps-auto-request+diagnostics",
+          "HTTPS/contexto seguro: " + (secureContext ? "sí" : "no"),
+          "API GPS del navegador: " + (hasGeoApi ? "sí" : "no"),
+          "API de permisos: " + (hasPermissionsApi ? "sí" : "no"),
+          "Permiso informado: " + lastPermissionState,
+          "GPS guardado en sesión: " + cachedText,
+          "Último error: " + errorText
+        ].join("\\n");
+      }
+
+      function getReadableGeolocationError(error) {
+        if (!error) return "sin error";
+        if (error.code === 1) return "1 PERMISSION_DENIED";
+        if (error.code === 2) return "2 POSITION_UNAVAILABLE";
+        if (error.code === 3) return "3 TIMEOUT";
+        if (error.code === "GEOLOCATION_UNSUPPORTED") return "GEOLOCATION_UNSUPPORTED";
+        return String(error.code || error.name || error.message || "desconocido");
+      }
+
       function getLocationPermissionPromptMessage() {
         return "ParkShare está solicitando tu ubicación al navegador. Si aparece el aviso nativo, pulsa Permitir. Si no aparece, este navegador está bloqueando el permiso y debes abrir la demo en Chrome/Safari o usar dirección/coordenadas.";
       }
@@ -873,7 +933,9 @@ const page = `<!doctype html>
         try {
           setLocationStatus(getLocationPermissionPromptMessage());
           const location = await getBrowserLocation();
+          lastLocationError = null;
           saveCachedBrowserLocation(location);
+          renderLocationDiagnostics();
           setLocationStatus(
             "GPS ready for this session. Accuracy: about " +
             Math.round(location.accuracyMeters || 0) +
@@ -885,6 +947,8 @@ const page = `<!doctype html>
             setLocationStatus("Using the GPS position already allowed in this session.");
             return { location: cachedBrowserLocation, fromCache: true };
           }
+          lastLocationError = error;
+          renderLocationDiagnostics();
           setLocationStatus(getLocationFailureMessage(error));
           throw error;
         }
@@ -1396,6 +1460,7 @@ const page = `<!doctype html>
 
       renderSteps(["Choose a demo scenario", "The page will call POST /demo", "MCP clients keep using POST /mcp"]);
       renderStructured({});
+      renderLocationDiagnostics();
       setLocationStatus("Pulsa Permitir ubicación al entrar para usar GPS real. Si este navegador no muestra el permiso nativo, escribe una dirección completa o coordenadas.");
       window.setTimeout(requestInitialBrowserLocation, 600);
     </script>
