@@ -473,6 +473,21 @@ const page = `<!doctype html>
         font-size: 13px;
         line-height: 1.35;
       }
+      .location-gate {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border: 1px solid #b9d7ca;
+        border-radius: 8px;
+        background: #f2faf6;
+      }
+      .location-gate strong {
+        color: #17211d;
+        font-size: 15px;
+      }
+      .location-gate p {
+        font-size: 13px;
+      }
       .fallback-location label {
         color: #5d6963;
         font-size: 13px;
@@ -577,7 +592,7 @@ const page = `<!doctype html>
           <div class="brand-mark">P</div>
           <h1>ParkShare Alexa+ MCP</h1>
           <p>
-            Interactive demo for the ParkShare Alexa+ mobility copilot. The supermarket flow uses the
+            Interactive demo for the ParkShare Alexa+ mobility copilot. Nearby-place search uses the
             visitor's browser location when they allow it, searches live OpenStreetMap data, and draws
             the route on a real map. MCP clients use <code>POST /mcp</code>; this browser demo calls
             <code>POST /demo</code>, backed by the same ParkShare tool functions.
@@ -592,6 +607,11 @@ const page = `<!doctype html>
 
         <section class="fallback-location">
           <h2>Start location</h2>
+          <div class="location-gate" id="locationGate">
+            <strong>Permitir ubicación para esta demo</strong>
+            <p>ParkShare necesita tu GPS real para buscar sitios cercanos con precisión. Si el navegador embebido no muestra el permiso, abre esta URL en Chrome/Safari o usa coordenadas exactas.</p>
+            <button class="secondary-button" id="startLocationPermission" type="button">Permitir ubicación</button>
+          </div>
           <label for="manualLatitude">Exact coordinates</label>
           <div class="coordinate-grid">
             <input id="manualLatitude" type="text" inputmode="decimal" placeholder="Latitude">
@@ -620,7 +640,7 @@ const page = `<!doctype html>
 
         <section class="map" aria-label="Route preview">
           <div id="map">
-            <div class="map-placeholder">Choose a supermarket scenario and allow location to draw a live route.</div>
+            <div class="map-placeholder">Choose a nearby-place scenario and allow location to draw a live route.</div>
           </div>
         </section>
 
@@ -660,6 +680,8 @@ const page = `<!doctype html>
       const manualLatitude = document.querySelector("#manualLatitude");
       const manualLongitude = document.querySelector("#manualLongitude");
       const useBrowserLocation = document.querySelector("#useBrowserLocation");
+      const startLocationPermission = document.querySelector("#startLocationPermission");
+      const locationGate = document.querySelector("#locationGate");
       const locationStatus = document.querySelector("#locationStatus");
       const steps = document.querySelector("#steps");
       const results = document.querySelector("#results");
@@ -772,6 +794,37 @@ const page = `<!doctype html>
           setLocationStatus(getLocationFailureMessage(error));
           throw error;
         }
+      }
+
+      async function requestEntryLocationPermission() {
+        startLocationPermission.disabled = true;
+        try {
+          await requestBrowserLocationForSearch();
+          locationGate.style.display = "none";
+          manualLatitude.value = "";
+          manualLongitude.value = "";
+          manualLocation.value = "";
+        } catch (error) {
+          setLocationStatus(getLocationFailureMessage(error));
+        } finally {
+          startLocationPermission.disabled = false;
+        }
+      }
+
+      async function requestInitialBrowserLocation() {
+        try {
+          await requestBrowserLocationForSearch();
+          locationGate.style.display = "none";
+        } catch (error) {
+          setLocationStatus(getLocationFailureMessage(error));
+        }
+      }
+
+      function addClientTimeContext(args) {
+        const now = new Date();
+        args.clientWeekday = now.getDay();
+        args.clientMinutes = now.getHours() * 60 + now.getMinutes();
+        args.clientTimezoneOffsetMinutes = now.getTimezoneOffset();
       }
 
       function getLocationFailureMessage(error) {
@@ -978,6 +1031,13 @@ const page = `<!doctype html>
         return "";
       }
 
+      function describeAvailabilityForSpeech(destination) {
+        if (!destination) return "";
+        if (destination.availability === "open") return " It appears open now.";
+        if (destination.availability === "closed") return " It may be closed now, so check before going.";
+        return "";
+      }
+
       function textHasLocalityContext(text) {
         const lower = text.toLowerCase();
         return [
@@ -1061,7 +1121,7 @@ const page = `<!doctype html>
             "Using " + label + ", I found " + destination.name + ", " +
             describeStructuredCategory(structured) + "about " +
             destination.distanceKm + " kilometers away. The drive is around " +
-            formatMinutes(route.durationMinutes) + ".";
+            formatMinutes(route.durationMinutes) + "." + describeAvailabilityForSpeech(destination);
         }
       }
 
@@ -1112,6 +1172,7 @@ const page = `<!doctype html>
 
         try {
           const args = { ...scenario.args };
+          addClientTimeContext(args);
           let driverText = scenario.driver;
           if (scenario.needsLocation) {
             const manualText = manualLocation.value.trim();
@@ -1209,6 +1270,7 @@ const page = `<!doctype html>
         useBrowserLocation.disabled = true;
         try {
           await requestBrowserLocationForSearch();
+          locationGate.style.display = "none";
           manualLatitude.value = "";
           manualLongitude.value = "";
           manualLocation.value = "";
@@ -1218,9 +1280,12 @@ const page = `<!doctype html>
           useBrowserLocation.disabled = false;
         }
       });
+      startLocationPermission.addEventListener("click", requestEntryLocationPermission);
 
       renderSteps(["Choose a demo scenario", "The page will call POST /demo", "MCP clients keep using POST /mcp"]);
       renderStructured({});
+      setLocationStatus("Pulsa Permitir ubicación al entrar para usar GPS real. Si este navegador no muestra el permiso, escribe una dirección completa o coordenadas.");
+      window.setTimeout(requestInitialBrowserLocation, 600);
     </script>
   </body>
 </html>`;
@@ -1474,6 +1539,12 @@ function formatMinutes(minutes) {
   return Number(minutes) === 1 ? "1 minute" : `${minutes} minutes`;
 }
 
+function formatAvailabilityForSpeech(place) {
+  if (place.availability === "open") return " It appears open now.";
+  if (place.availability === "closed") return " It may be closed now, so check before going.";
+  return "";
+}
+
 function describeStartLocation(source, label) {
   if (source === "browser_geolocation") {
     return "your precise browser location";
@@ -1578,10 +1649,7 @@ function needsLocationContextForTypedAddress(text, biasHint = null) {
   if (!normalized) return true;
   if (biasHint) return false;
   if (getCountryConstraint(text, null) || getLocalityHint(text)) return false;
-
-  const looksLikeStreet =
-    /\b(calle|avenida|avda|paseo|plaza|carretera|camino|ronda|trav[eé]s[ií]a|carrer|street|road|avenue)\b/i.test(text);
-  return looksLikeStreet;
+  return true;
 }
 
 function typedQueryHasHouseNumber(text) {
@@ -1634,7 +1702,8 @@ async function geocodeWithNominatim(query, biasHint = null) {
       hasValidCoordinates(result.lat, result.lon) &&
       resultMatchesCountry(result, countryConstraint) &&
       resultMatchesLocality(result, localityHint) &&
-      resultMatchesAddressPrecision(result, query)
+      resultMatchesAddressPrecision(result, query) &&
+      resultMatchesTypedAddressText(result, query)
     )
     .sort((a, b) => scoreGeocodeResult(b, localityHint) - scoreGeocodeResult(a, localityHint))[0];
 
@@ -1697,10 +1766,12 @@ async function geocodeWithPhoton(query, biasHint = null) {
         longitude,
         label: label || query,
         geocoder: "photon",
-        score: scoreGeocodeResult({ lat: latitude, lon: longitude, importance: 0.5 }, localityHint)
+        score: scoreGeocodeResult({ lat: latitude, lon: longitude, importance: 0.5 }, localityHint),
+        properties
       };
     })
     .filter(Boolean)
+    .filter((result) => photonResultMatchesTypedAddressText(result.properties, result.label, query))
     .sort((a, b) => b.score - a.score)[0];
 
   return best
@@ -1769,6 +1840,127 @@ function normalizeSearchText(text) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+function getDistinctiveAddressTokens(text) {
+  const stopwords = new Set([
+    "calle", "avenida", "avda", "paseo", "plaza", "carretera", "camino", "ronda", "travesia",
+    "carrer", "street", "road", "avenue", "de", "del", "la", "las", "los", "el", "y",
+    "zaragoza", "madrid", "barcelona", "valencia", "malaga", "sevilla", "santander",
+    "montblanc", "espana", "spain", "colombia", "aragon", "aragón"
+  ]);
+  return normalizeSearchText(text)
+    .replace(/[^a-z0-9ñ]+/g, " ")
+    .split(/\s+/)
+    .filter((token) =>
+      token.length >= 4 &&
+      !/^\d+[a-z]?$/.test(token) &&
+      !stopwords.has(token)
+    );
+}
+
+function levenshteinDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  const current = new Array(b.length + 1);
+
+  for (let i = 1; i <= a.length; i += 1) {
+    current[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    for (let j = 0; j <= b.length; j += 1) {
+      previous[j] = current[j];
+    }
+  }
+
+  return previous[b.length];
+}
+
+function tokenAppearsInText(token, normalizedText) {
+  if (normalizedText.includes(token)) return true;
+  const words = normalizedText.split(/\s+/).filter(Boolean);
+  return words.some((word) =>
+    word.length >= 4 &&
+    Math.abs(word.length - token.length) <= 1 &&
+    levenshteinDistance(word, token) <= 1
+  );
+}
+
+function resultMatchesTypedLabelText(label, query) {
+  const tokens = getDistinctiveAddressTokens(query);
+  if (!tokens.length) return true;
+
+  const normalizedLabel = normalizeSearchText(label).replace(/[^a-z0-9ñ]+/g, " ");
+  const matches = tokens.filter((token) => tokenAppearsInText(token, normalizedLabel)).length;
+  return matches === tokens.length || (tokens.length >= 3 && matches / tokens.length >= 0.85);
+}
+
+function resultMatchesTypedAddressText(result, query) {
+  const addressLine = [
+    result.address?.road,
+    result.address?.pedestrian,
+    result.address?.square,
+  ].filter(Boolean).join(" ");
+
+  if (addressLine && getDistinctiveAddressTokens(query).length) {
+    if (isStrictSingleStreetTokenQuery(query)) {
+      const queryTokens = getDistinctiveAddressTokens(query);
+      const addressTokens = getDistinctiveAddressTokens(addressLine);
+      return queryTokens.length === 1 &&
+        addressTokens.length === 1 &&
+        tokenAppearsInText(queryTokens[0], normalizeSearchText(addressLine).replace(/[^a-z0-9ñ]+/g, " "));
+    }
+    return resultMatchesTypedLabelText(addressLine, query);
+  }
+
+  const label = [
+    result.display_name,
+    result.address?.neighbourhood
+  ].filter(Boolean).join(" ");
+  if (isStrictSingleStreetTokenQuery(query)) {
+    return strictSingleStreetLabelMatches(label, query);
+  }
+  return resultMatchesTypedLabelText(label, query);
+}
+
+function photonResultMatchesTypedAddressText(properties, label, query) {
+  if (properties?.street && getDistinctiveAddressTokens(query).length) {
+    if (isStrictSingleStreetTokenQuery(query)) {
+      const queryTokens = getDistinctiveAddressTokens(query);
+      const addressTokens = getDistinctiveAddressTokens(properties.street);
+      return queryTokens.length === 1 &&
+        addressTokens.length === 1 &&
+        tokenAppearsInText(queryTokens[0], normalizeSearchText(properties.street).replace(/[^a-z0-9ñ]+/g, " "));
+    }
+    return resultMatchesTypedLabelText(properties.street, query);
+  }
+
+  if (isStrictSingleStreetTokenQuery(query)) {
+    return strictSingleStreetLabelMatches(label, query);
+  }
+
+  return resultMatchesTypedLabelText(label, query);
+}
+
+function isStrictSingleStreetTokenQuery(query) {
+  return /\b(calle|avenida|avda|paseo|carretera|camino|ronda|trav[eé]s[ií]a|carrer|street|road|avenue)\b/i.test(query) &&
+    getDistinctiveAddressTokens(query).length === 1;
+}
+
+function strictSingleStreetLabelMatches(label, query) {
+  const queryTokens = getDistinctiveAddressTokens(query);
+  const labelTokens = getDistinctiveAddressTokens(label);
+  return queryTokens.length === 1 &&
+    labelTokens.length === 1 &&
+    tokenAppearsInText(queryTokens[0], normalizeSearchText(label).replace(/[^a-z0-9ñ]+/g, " "));
 }
 
 function resultMatchesAddressPrecision(result, query) {
@@ -1887,6 +2079,7 @@ function placeFromOsmElement(element, origin, category = livePlaceCategories[0])
     distanceKm: Number(distanceKm.toFixed(2)),
     driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
     address: formatAddress(tags) || tags.operator || tags.brand || "OpenStreetMap location",
+    openingHours: tags.opening_hours || null,
     parkingLeads: 0,
     latitude,
     longitude,
@@ -1927,6 +2120,7 @@ function placeFromNominatimResult(result, origin, category = livePlaceCategories
     distanceKm: Number(distanceKm.toFixed(2)),
     driveMinutes: Math.max(1, Math.round((distanceKm / 35) * 60)),
     address: displayName,
+    openingHours: result.extratags?.opening_hours || null,
     parkingLeads: 0,
     latitude,
     longitude,
@@ -1939,6 +2133,7 @@ async function fetchNominatimPlaces(origin, category, maxResults) {
     for (const term of category.nominatimQueries) {
       const params = new URLSearchParams({
         format: "jsonv2",
+        extratags: "1",
         limit: String(Math.min(Math.max(maxResults * 4, 12), 25)),
         q: term,
         bounded: "1",
@@ -1955,6 +2150,7 @@ async function fetchNominatimPlaces(origin, category, maxResults) {
         nominatimSearchTimeoutMs
       );
       const results = (data || [])
+        .filter((result) => nominatimResultMatchesCategory(result, category))
         .map((result) => placeFromNominatimResult(result, origin, category))
         .filter(Boolean)
         .sort((a, b) => a.distanceKm - b.distanceKm)
@@ -1971,6 +2167,23 @@ async function fetchNominatimPlaces(origin, category, maxResults) {
 
 async function fetchNominatimSupermarkets(origin, maxResults) {
   return fetchNominatimPlaces(origin, livePlaceCategories[0], maxResults);
+}
+
+function nominatimResultMatchesCategory(result, category) {
+  const resultCategory = String(result.category || result.class || "").toLowerCase();
+  const resultType = String(result.type || "").toLowerCase();
+  const extratags = result.extratags || {};
+  const address = result.address || {};
+
+  return category.filters.some((filter) => {
+    const expectedKey = filter.key.toLowerCase();
+    const values = filter.values.map((value) => String(value).toLowerCase());
+    const taggedValue = String(extratags[filter.key] || address[filter.key] || "").toLowerCase();
+
+    return resultCategory === expectedKey ||
+      values.includes(resultType) ||
+      values.includes(taggedValue);
+  });
 }
 
 function buildOverpassCategoryQuery(category, radius, origin, rawResultLimit) {
@@ -2084,15 +2297,84 @@ async function fetchLivePlaceCandidates(origin, category, maxResults) {
   return mergePlaceResults(groups, maxResults);
 }
 
-async function rankSupermarketsByPracticalRoute(origin, places, maxResults) {
+function getPlaceAvailability(place, context = {}) {
+  const openingHours = String(place.openingHours || "").trim();
+  if (!openingHours) {
+    return { status: "unknown", rank: 0 };
+  }
+
+  const lower = openingHours.toLowerCase();
+  if (lower.includes("24/7")) {
+    return { status: "open", rank: 0 };
+  }
+
+  const weekday = Number(context.clientWeekday);
+  const minutes = Number(context.clientMinutes);
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6 || !Number.isFinite(minutes)) {
+    return { status: "unknown", rank: 0 };
+  }
+
+  const matchingSegments = openingHours
+    .split(";")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment && openingHoursSegmentMatchesDay(segment, weekday));
+
+  if (!matchingSegments.length) {
+    return { status: "closed", rank: 2 };
+  }
+
+  let sawTimedRule = false;
+  for (const segment of matchingSegments) {
+    if (/\boff\b|closed/i.test(segment)) {
+      continue;
+    }
+
+    const ranges = [...segment.matchAll(/(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?/g)];
+    if (!ranges.length) continue;
+    sawTimedRule = true;
+
+    if (ranges.some((range) => minutesInOpeningRange(minutes, range))) {
+      return { status: "open", rank: 0 };
+    }
+  }
+
+  return sawTimedRule ? { status: "closed", rank: 1 } : { status: "unknown", rank: 0 };
+}
+
+function openingHoursSegmentMatchesDay(segment, weekday) {
+  const dayIndexes = { Su: 0, Mo: 1, Tu: 2, We: 3, Th: 4, Fr: 5, Sa: 6 };
+  const dayRanges = [...segment.matchAll(/\b(Mo|Tu|We|Th|Fr|Sa|Su)(?:-(Mo|Tu|We|Th|Fr|Sa|Su))?/g)];
+  if (!dayRanges.length) return true;
+
+  return dayRanges.some((match) => {
+    const start = dayIndexes[match[1]];
+    const end = dayIndexes[match[2] || match[1]];
+    if (start <= end) return weekday >= start && weekday <= end;
+    return weekday >= start || weekday <= end;
+  });
+}
+
+function minutesInOpeningRange(currentMinutes, match) {
+  const start = Number(match[1]) * 60 + Number(match[2] || 0);
+  const end = Number(match[3]) * 60 + Number(match[4] || 0);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  if (start === end) return true;
+  if (start < end) return currentMinutes >= start && currentMinutes <= end;
+  return currentMinutes >= start || currentMinutes <= end;
+}
+
+async function rankSupermarketsByPracticalRoute(origin, places, maxResults, context = {}) {
   const candidates = places.slice(0, Math.min(places.length, routedCandidateLimit));
   const ranked = await Promise.all(
     candidates.map(async (place) => {
+      const availability = getPlaceAvailability(place, context);
       const route = await fetchDrivingRoute(origin, place).catch(() => null);
       if (!route) {
         return {
           ...place,
+          availability: availability.status,
           route: null,
+          rankingAvailability: availability.rank,
           rankingDistanceKm: place.distanceKm,
           rankingMinutes: place.driveMinutes
         };
@@ -2100,9 +2382,11 @@ async function rankSupermarketsByPracticalRoute(origin, places, maxResults) {
 
       return {
         ...place,
+        availability: availability.status,
         driveDistanceKm: route.distanceKm,
         driveMinutes: route.durationMinutes,
         route,
+        rankingAvailability: availability.rank,
         rankingDistanceKm: place.distanceKm,
         rankingMinutes: route.durationMinutes
       };
@@ -2111,9 +2395,12 @@ async function rankSupermarketsByPracticalRoute(origin, places, maxResults) {
 
   const byId = new Map(ranked.map((place) => [place.id, place]));
   for (const place of places.slice(candidates.length)) {
+    const availability = getPlaceAvailability(place, context);
     byId.set(place.id, {
       ...place,
+      availability: availability.status,
       route: null,
+      rankingAvailability: availability.rank,
       rankingDistanceKm: place.distanceKm,
       rankingMinutes: place.driveMinutes
     });
@@ -2121,13 +2408,20 @@ async function rankSupermarketsByPracticalRoute(origin, places, maxResults) {
 
   const sorted = [...byId.values()]
     .sort((a, b) =>
+      a.rankingAvailability - b.rankingAvailability ||
       a.rankingDistanceKm - b.rankingDistanceKm ||
       a.rankingMinutes - b.rankingMinutes ||
       a.name.localeCompare(b.name)
     );
 
   const bestRoute = sorted[0]?.route || null;
-  const results = sorted.slice(0, maxResults).map(({ route, rankingDistanceKm, rankingMinutes, ...place }) => place);
+  const results = sorted.slice(0, maxResults).map(({
+    route,
+    rankingAvailability,
+    rankingDistanceKm,
+    rankingMinutes,
+    ...place
+  }) => place);
 
   return { results, route: bestRoute };
 }
@@ -2186,7 +2480,7 @@ async function findNearbyPlace(args) {
     const live = await fetchLivePlaceCandidates(origin, liveCategory, maxResults);
 
     if (live?.results?.length) {
-      const ranked = await rankSupermarketsByPracticalRoute(origin, live.results, maxResults);
+      const ranked = await rankSupermarketsByPracticalRoute(origin, live.results, maxResults, args);
       const best = ranked.results[0];
       const route = ranked.route;
 
@@ -2199,7 +2493,7 @@ async function findNearbyPlace(args) {
         spoken:
           `Using ${describeStartLocation(source, label)}, ` +
           `I found ${best.name}, the nearest ${liveCategory.singular}, about ${best.distanceKm} kilometers away. ` +
-          `The drive is around ${formatMinutes(best.driveMinutes)}.`,
+          `The drive is around ${formatMinutes(best.driveMinutes)}.${formatAvailabilityForSpeech(best)}`,
         data: {
           query: args.query,
           category: liveCategory.id,
