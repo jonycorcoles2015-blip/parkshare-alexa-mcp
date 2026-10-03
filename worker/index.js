@@ -1337,9 +1337,13 @@ function buildGeocodeQueries(text) {
 }
 
 async function geocodeWithNominatim(query) {
+  const localityHint = getLocalityHint(query);
+  const viewbox = localityHint ? viewboxForRadius(localityHint, localityHint.radiusMeters) : null;
   const url =
     `https://nominatim.openstreetmap.org/search?` +
-    `format=jsonv2&addressdetails=1&limit=5&countrycodes=es&q=${encodeURIComponent(query)}`;
+    `format=jsonv2&addressdetails=1&limit=5&countrycodes=es` +
+    (viewbox ? `&viewbox=${viewbox}&bounded=1` : "") +
+    `&q=${encodeURIComponent(query)}`;
   const data = await fetchJsonWithTimeout(url, {
     headers: {
       "accept": "application/json",
@@ -1353,7 +1357,7 @@ async function geocodeWithNominatim(query) {
 
   const best = data
     .filter((result) => hasValidCoordinates(result.lat, result.lon))
-    .sort((a, b) => Number(b.importance || 0) - Number(a.importance || 0))[0];
+    .sort((a, b) => scoreGeocodeResult(b, localityHint) - scoreGeocodeResult(a, localityHint))[0];
 
   if (!best || !hasValidCoordinates(best.lat, best.lon)) {
     return null;
@@ -1368,9 +1372,12 @@ async function geocodeWithNominatim(query) {
 }
 
 async function geocodeWithPhoton(query) {
+  const localityHint = getLocalityHint(query);
   const url =
     `https://photon.komoot.io/api/?` +
-    `limit=5&q=${encodeURIComponent(query)}`;
+    `limit=5` +
+    (localityHint ? `&lat=${localityHint.latitude}&lon=${localityHint.longitude}` : "") +
+    `&q=${encodeURIComponent(query)}`;
   const data = await fetchJsonWithTimeout(url, {
     headers: {
       "accept": "application/json"
@@ -1397,12 +1404,48 @@ async function geocodeWithPhoton(query) {
         latitude,
         longitude,
         label: label || query,
-        geocoder: "photon"
+        geocoder: "photon",
+        score: scoreGeocodeResult({ lat: latitude, lon: longitude, importance: 0.5 }, localityHint)
       };
     })
-    .filter(Boolean)[0];
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score)[0];
 
-  return best || null;
+  return best
+    ? {
+        latitude: best.latitude,
+        longitude: best.longitude,
+        label: best.label,
+        geocoder: best.geocoder
+      }
+    : null;
+}
+
+function getLocalityHint(query) {
+  const lower = String(query || "").toLowerCase();
+  const hints = [
+    { names: ["zaragoza"], latitude: 41.652134, longitude: -0.880943, radiusMeters: 30000 },
+    { names: ["madrid"], latitude: 40.416775, longitude: -3.70379, radiusMeters: 35000 },
+    { names: ["barcelona"], latitude: 41.387397, longitude: 2.168568, radiusMeters: 30000 },
+    { names: ["valencia"], latitude: 39.469907, longitude: -0.376288, radiusMeters: 30000 },
+    { names: ["malaga", "málaga"], latitude: 36.721302, longitude: -4.421637, radiusMeters: 30000 },
+    { names: ["sevilla", "seville"], latitude: 37.389092, longitude: -5.984459, radiusMeters: 30000 },
+    { names: ["montblanc"], latitude: 41.3762, longitude: 1.1619, radiusMeters: 15000 }
+  ];
+
+  return hints.find((hint) => hint.names.some((name) => lower.includes(name))) || null;
+}
+
+function scoreGeocodeResult(result, localityHint) {
+  const base = Number(result.importance || 0);
+  if (!localityHint || !hasValidCoordinates(result.lat, result.lon)) return base;
+
+  const distance = haversineKm(localityHint, {
+    latitude: Number(result.lat),
+    longitude: Number(result.lon)
+  });
+  const localityBoost = Math.max(0, 1 - distance / (localityHint.radiusMeters / 1000));
+  return base + localityBoost * 2;
 }
 
 function getApproximateRequestLocation(request) {
