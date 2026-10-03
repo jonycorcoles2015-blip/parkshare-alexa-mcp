@@ -609,7 +609,7 @@ const page = `<!doctype html>
           <h2>Start location</h2>
           <div class="location-gate" id="locationGate">
             <strong>Permitir ubicación para esta demo</strong>
-            <p>ParkShare necesita tu GPS real para buscar sitios cercanos con precisión. Si el navegador embebido no muestra el permiso, abre esta URL en Chrome/Safari o usa coordenadas exactas.</p>
+            <p>ParkShare necesita tu GPS real para buscar sitios cercanos con precisión. Pulsa el botón y acepta el aviso nativo del navegador. Si este navegador no muestra el aviso, abre la URL en Chrome/Safari o usa coordenadas exactas.</p>
             <button class="secondary-button" id="startLocationPermission" type="button">Permitir ubicación</button>
           </div>
           <label for="manualLatitude">Exact coordinates</label>
@@ -620,7 +620,7 @@ const page = `<!doctype html>
           <label for="manualLocation">Exact address or city</label>
           <input id="manualLocation" type="text" placeholder="Street and number, city, country" autocomplete="street-address">
           <div class="location-controls">
-            <button class="secondary-button" id="useBrowserLocation" type="button">Use my browser location</button>
+            <button class="secondary-button" id="useBrowserLocation" type="button">Usar ubicación GPS</button>
             <div class="location-status" id="locationStatus">Press a "near me" scenario or this button to request browser GPS. If this embedded browser blocks the permission popup, enter an exact address or coordinates.</div>
           </div>
           <small>Leave these empty to request browser GPS for this search. IP/network location is not used for nearest-place results because it can be kilometers away. If GPS is denied, enter exact coordinates or an address with enough city and country context.</small>
@@ -690,7 +690,7 @@ const page = `<!doctype html>
       let routeLayer;
       let driverMarker;
       let placeMarker;
-      let cachedBrowserLocation = null;
+      let cachedBrowserLocation = loadCachedBrowserLocation();
 
       function addMessage(className, text) {
         const node = document.createElement("div");
@@ -764,6 +764,102 @@ const page = `<!doctype html>
         });
       }
 
+      function loadCachedBrowserLocation() {
+        try {
+          const raw = window.sessionStorage && window.sessionStorage.getItem("parkshareDemoBrowserLocation");
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed.latitude !== "number" || typeof parsed.longitude !== "number") {
+            return null;
+          }
+          return parsed;
+        } catch (error) {
+          return null;
+        }
+      }
+
+      function saveCachedBrowserLocation(location) {
+        cachedBrowserLocation = {
+          ...location,
+          savedAt: Date.now()
+        };
+        try {
+          if (window.sessionStorage) {
+            window.sessionStorage.setItem("parkshareDemoBrowserLocation", JSON.stringify(cachedBrowserLocation));
+          }
+        } catch (error) {
+          // Session storage can be disabled in embedded browsers.
+        }
+      }
+
+      async function getGeolocationPermissionState() {
+        if (typeof window !== "undefined" && window.isSecureContext === false) {
+          return "blocked_not_secure";
+        }
+
+        if (typeof navigator === "undefined" || !navigator.geolocation) {
+          return "unavailable";
+        }
+
+        if (!navigator.permissions || !navigator.permissions.query) {
+          return "unknown";
+        }
+
+        try {
+          const status = await navigator.permissions.query({ name: "geolocation" });
+          status.onchange = () => {
+            updateLocationStatusForPermissionState(status.state);
+          };
+          return status.state || "unknown";
+        } catch (error) {
+          return "unknown";
+        }
+      }
+
+      function updateLocationStatusForPermissionState(state) {
+        if (cachedBrowserLocation) {
+          setLocationStatus(
+            "GPS guardado para esta sesión. Precisión aproximada: " +
+            Math.round(cachedBrowserLocation.accuracyMeters || 0) +
+            " metros."
+          );
+          return;
+        }
+
+        if (state === "granted") {
+          setLocationStatus("El navegador ya tiene permiso de ubicación. Pulsa un escenario o Usar ubicación GPS para tomar el punto actual.");
+          return;
+        }
+
+        if (state === "prompt") {
+          setLocationStatus("Pulsa Permitir ubicación o un escenario cercano. El navegador debería mostrar el aviso nativo de ubicación.");
+          return;
+        }
+
+        if (state === "denied") {
+          setLocationStatus("El permiso de ubicación está bloqueado para esta página. Actívalo en los permisos del sitio o escribe coordenadas/dirección exacta.");
+          return;
+        }
+
+        if (state === "blocked_not_secure") {
+          setLocationStatus("El navegador no permite GPS porque la página no está en un contexto seguro.");
+          return;
+        }
+
+        if (state === "unavailable") {
+          setLocationStatus("Este navegador no expone GPS. Abre la demo en Chrome/Safari o escribe coordenadas/dirección exacta.");
+          return;
+        }
+
+        setLocationStatus("Pulsa Permitir ubicación. Si no aparece ningún aviso nativo, este navegador está bloqueando GPS: abre la demo en Chrome/Safari o escribe coordenadas/dirección exacta.");
+      }
+
+      async function refreshLocationPermissionState() {
+        const state = await getGeolocationPermissionState();
+        updateLocationStatusForPermissionState(state);
+        return state;
+      }
+
       function setLocationStatus(text) {
         locationStatus.textContent = text;
       }
@@ -776,10 +872,7 @@ const page = `<!doctype html>
         try {
           setLocationStatus(getLocationPermissionPromptMessage());
           const location = await getBrowserLocation();
-          cachedBrowserLocation = {
-            ...location,
-            savedAt: Date.now()
-          };
+          saveCachedBrowserLocation(location);
           setLocationStatus(
             "GPS ready for this session. Accuracy: about " +
             Math.round(location.accuracyMeters || 0) +
@@ -799,6 +892,7 @@ const page = `<!doctype html>
       async function requestEntryLocationPermission() {
         startLocationPermission.disabled = true;
         try {
+          await refreshLocationPermissionState();
           await requestBrowserLocationForSearch();
           locationGate.style.display = "none";
           manualLatitude.value = "";
@@ -806,17 +900,21 @@ const page = `<!doctype html>
           manualLocation.value = "";
         } catch (error) {
           setLocationStatus(getLocationFailureMessage(error));
+          await refreshLocationPermissionState();
         } finally {
           startLocationPermission.disabled = false;
         }
       }
 
       async function requestInitialBrowserLocation() {
-        try {
-          await requestBrowserLocationForSearch();
-          locationGate.style.display = "none";
-        } catch (error) {
-          setLocationStatus(getLocationFailureMessage(error));
+        const state = await refreshLocationPermissionState();
+        if (state === "granted") {
+          try {
+            await requestBrowserLocationForSearch();
+            locationGate.style.display = "none";
+          } catch (error) {
+            setLocationStatus(getLocationFailureMessage(error));
+          }
         }
       }
 
@@ -1269,6 +1367,7 @@ const page = `<!doctype html>
       useBrowserLocation.addEventListener("click", async () => {
         useBrowserLocation.disabled = true;
         try {
+          await refreshLocationPermissionState();
           await requestBrowserLocationForSearch();
           locationGate.style.display = "none";
           manualLatitude.value = "";
@@ -1276,6 +1375,7 @@ const page = `<!doctype html>
           manualLocation.value = "";
         } catch (error) {
           setLocationStatus(getLocationFailureMessage(error));
+          await refreshLocationPermissionState();
         } finally {
           useBrowserLocation.disabled = false;
         }
@@ -1284,7 +1384,7 @@ const page = `<!doctype html>
 
       renderSteps(["Choose a demo scenario", "The page will call POST /demo", "MCP clients keep using POST /mcp"]);
       renderStructured({});
-      setLocationStatus("Pulsa Permitir ubicación al entrar para usar GPS real. Si este navegador no muestra el permiso, escribe una dirección completa o coordenadas.");
+      setLocationStatus("Pulsa Permitir ubicación al entrar para usar GPS real. Si este navegador no muestra el permiso nativo, escribe una dirección completa o coordenadas.");
       window.setTimeout(requestInitialBrowserLocation, 600);
     </script>
   </body>
@@ -1299,6 +1399,18 @@ function json(data, init = {}) {
       "access-control-allow-headers":
         "content-type, accept, mcp-session-id, mcp-protocol-version, authorization",
       "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+      ...(init.headers || {})
+    }
+  });
+}
+
+function html(data, init = {}) {
+  return new Response(data, {
+    ...init,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "permissions-policy": "geolocation=(self)",
+      "feature-policy": "geolocation 'self'",
       ...(init.headers || {})
     }
   });
@@ -1614,7 +1726,11 @@ async function geocodeLocationText(text, biasHint = null) {
 function buildGeocodeQueries(text) {
   const cleaned = String(text || "").trim();
   const lower = cleaned.toLowerCase();
-  const baseVariants = [...buildSpanishStreetQueryVariants(cleaned), cleaned];
+  const baseVariants = [
+    ...buildSpanishStreetQueryVariants(cleaned),
+    ...buildImplicitSpanishStreetQueryVariants(cleaned),
+    cleaned
+  ];
   const variants = [];
   const mentionsCountry =
     lower.includes(" españa") ||
@@ -1644,6 +1760,42 @@ function buildSpanishStreetQueryVariants(text) {
   return [`${prefix} de ${rest}`];
 }
 
+function buildImplicitSpanishStreetQueryVariants(text) {
+  const raw = String(text || "").trim();
+  if (!raw || /\b(calle|avenida|avda\.?|paseo|plaza|carretera|camino|ronda|trav[eé]s[ií]a|carrer|street|road|avenue)\b/i.test(raw)) {
+    return [];
+  }
+
+  const split = splitImplicitStreetHouseNumber(raw);
+  if (!split) return [];
+
+  const streetWithCommaNumber = `${split.street}, ${split.houseNumber}${split.suffix}`;
+  const streetWithTrailingNumber = `${split.street} ${split.houseNumber}${split.suffix}`;
+  return [
+    `Calle de ${streetWithCommaNumber}`,
+    `Calle ${streetWithCommaNumber}`,
+    `Calle de ${streetWithTrailingNumber}`,
+    `Calle ${streetWithTrailingNumber}`
+  ];
+}
+
+function splitImplicitStreetHouseNumber(text) {
+  const raw = String(text || "").trim();
+  const match = raw.match(/^(.+?)\s+(\d+[a-z]?)(.*)$/i);
+  if (!match || !/[a-záéíóúñ]/i.test(match[1])) return null;
+
+  const suffix = String(match[3] || "");
+  if (suffix && !/^\s*(,|\b(zaragoza|madrid|barcelona|valencia|malaga|málaga|sevilla|santander|montblanc|españa|espana|spain)\b)/i.test(suffix)) {
+    return null;
+  }
+
+  return {
+    street: match[1].trim(),
+    houseNumber: match[2].trim(),
+    suffix
+  };
+}
+
 function needsLocationContextForTypedAddress(text, biasHint = null) {
   const normalized = normalizeSearchText(text);
   if (!normalized) return true;
@@ -1664,6 +1816,11 @@ function extractTypedHouseNumber(text) {
   const trailingNumber = raw.match(/\b(calle|avenida|avda\.?|paseo|plaza|carretera|camino|ronda|trav[eé]s[ií]a|carrer|street|road|avenue)\b\s+(.+?)\s+(\d+[a-z]?)(?=,|\s+(?:zaragoza|madrid|barcelona|valencia|malaga|málaga|sevilla|santander|montblanc|españa|espana|spain|colombia)\b|$)/i);
   if (trailingNumber && /[a-záéíóúñ]/i.test(trailingNumber[2])) {
     return normalizeHouseNumber(trailingNumber[3]);
+  }
+
+  const implicitStreetNumber = splitImplicitStreetHouseNumber(raw);
+  if (implicitStreetNumber) {
+    return normalizeHouseNumber(implicitStreetNumber.houseNumber);
   }
 
   return null;
@@ -1749,7 +1906,7 @@ async function geocodeWithPhoton(query, biasHint = null) {
       const properties = feature.properties || {};
       if (
         !photonResultMatchesCountry(properties, countryConstraint) ||
-        !coordinatesMatchLocality(latitude, longitude, localityHint)
+        !photonResultMatchesLocality(properties, latitude, longitude, localityHint)
       ) {
         return null;
       }
@@ -1792,14 +1949,14 @@ function getLocalityHint(query) {
   }
 
   const hints = [
-    { names: ["zaragoza"], latitude: 41.652134, longitude: -0.880943, radiusMeters: 30000, countryCodes: ["es"] },
-    { names: ["madrid"], latitude: 40.416775, longitude: -3.70379, radiusMeters: 35000, countryCodes: ["es"] },
-    { names: ["barcelona"], latitude: 41.387397, longitude: 2.168568, radiusMeters: 30000, countryCodes: ["es"] },
-    { names: ["valencia"], latitude: 39.469907, longitude: -0.376288, radiusMeters: 30000, countryCodes: ["es"] },
-    { names: ["malaga", "málaga"], latitude: 36.721302, longitude: -4.421637, radiusMeters: 30000, countryCodes: ["es"] },
-    { names: ["sevilla", "seville"], latitude: 37.389092, longitude: -5.984459, radiusMeters: 30000, countryCodes: ["es"] },
-    { names: ["santander"], latitude: 43.462306, longitude: -3.80998, radiusMeters: 25000, countryCodes: ["es"] },
-    { names: ["montblanc"], latitude: 41.3762, longitude: 1.1619, radiusMeters: 15000, countryCodes: ["es"] }
+    { names: ["zaragoza"], latitude: 41.652134, longitude: -0.880943, radiusMeters: 16000, countryCodes: ["es"], requireLocalityName: true },
+    { names: ["madrid"], latitude: 40.416775, longitude: -3.70379, radiusMeters: 25000, countryCodes: ["es"], requireLocalityName: true },
+    { names: ["barcelona"], latitude: 41.387397, longitude: 2.168568, radiusMeters: 18000, countryCodes: ["es"], requireLocalityName: true },
+    { names: ["valencia"], latitude: 39.469907, longitude: -0.376288, radiusMeters: 18000, countryCodes: ["es"], requireLocalityName: true },
+    { names: ["malaga", "málaga"], latitude: 36.721302, longitude: -4.421637, radiusMeters: 18000, countryCodes: ["es"], requireLocalityName: true },
+    { names: ["sevilla", "seville"], latitude: 37.389092, longitude: -5.984459, radiusMeters: 18000, countryCodes: ["es"], requireLocalityName: true },
+    { names: ["santander"], latitude: 43.462306, longitude: -3.80998, radiusMeters: 12000, countryCodes: ["es"], requireLocalityName: true },
+    { names: ["montblanc"], latitude: 41.3762, longitude: 1.1619, radiusMeters: 8000, countryCodes: ["es"], requireLocalityName: true }
   ];
 
   return hints.find((hint) => hint.names.some((name) => lower.includes(name))) || null;
@@ -1968,7 +2125,11 @@ function resultMatchesAddressPrecision(result, query) {
   if (!expectedHouseNumber) return true;
 
   const actualHouseNumber = normalizeHouseNumber(result.address?.house_number);
-  return actualHouseNumber === expectedHouseNumber;
+  if (actualHouseNumber) {
+    return actualHouseNumber === expectedHouseNumber;
+  }
+
+  return Boolean(result.address?.road || result.address?.pedestrian || result.address?.square);
 }
 
 function getNominatimPrecision(result) {
@@ -1998,7 +2159,50 @@ function photonResultMatchesCountry(properties, countryConstraint) {
 
 function resultMatchesLocality(result, localityHint) {
   if (!localityHint) return true;
+  if (localityHint.requireLocalityName && !addressMatchesLocalityName(result.address || {}, localityHint)) {
+    return false;
+  }
   return coordinatesMatchLocality(Number(result.lat), Number(result.lon), localityHint);
+}
+
+function photonResultMatchesLocality(properties, latitude, longitude, localityHint) {
+  if (!localityHint) return true;
+  if (localityHint.requireLocalityName && !propertiesMatchLocalityName(properties || {}, localityHint)) {
+    return false;
+  }
+  return coordinatesMatchLocality(latitude, longitude, localityHint);
+}
+
+function addressMatchesLocalityName(address, localityHint) {
+  if (!localityHint?.names?.length) return true;
+  const localityText = [
+    address.city,
+    address.town,
+    address.village,
+    address.municipality,
+    address.hamlet,
+    address.suburb,
+    address.city_district
+  ].filter(Boolean).join(" ");
+  return localityNameMatches(localityText, localityHint.names);
+}
+
+function propertiesMatchLocalityName(properties, localityHint) {
+  if (!localityHint?.names?.length) return true;
+  const localityText = [
+    properties.city,
+    properties.town,
+    properties.village,
+    properties.municipality,
+    properties.locality,
+    properties.district
+  ].filter(Boolean).join(" ");
+  return localityNameMatches(localityText, localityHint.names);
+}
+
+function localityNameMatches(text, names) {
+  const normalized = normalizeSearchText(text).replace(/[^a-z0-9ñ]+/g, " ");
+  return names.some((name) => tokenAppearsInText(normalizeSearchText(name), normalized));
 }
 
 function coordinatesMatchLocality(latitude, longitude, localityHint) {
@@ -2756,9 +2960,7 @@ export default {
         });
       }
 
-      return new Response(page, {
-        headers: { "content-type": "text/html; charset=utf-8" }
-      });
+      return html(page);
     }
 
     return new Response("Not found", { status: 404 });
