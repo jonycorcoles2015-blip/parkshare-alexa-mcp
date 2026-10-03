@@ -706,6 +706,7 @@ const page = `<!doctype html>
       const browserLocationAttemptCount = 4;
       const browserLocationAttemptTimeoutMs = 6000;
       const browserLocationRetryDelayMs = 800;
+      const browserLocationWatchTimeoutMs = 18000;
       let map;
       let routeLayer;
       let driverMarker;
@@ -787,6 +788,86 @@ const page = `<!doctype html>
         });
       }
 
+      function getBrowserLocationFromWatch(onAttempt, startingBestLocation) {
+        return new Promise((resolve, reject) => {
+          if (typeof navigator === "undefined" || !navigator.geolocation || !navigator.geolocation.watchPosition) {
+            const error = new Error("This browser does not expose GPS watch location.");
+            error.code = "GEOLOCATION_UNSUPPORTED";
+            reject(error);
+            return;
+          }
+
+          let watchId = null;
+          let settled = false;
+          let bestLocation = startingBestLocation || null;
+          let lastError = null;
+
+          const cleanup = () => {
+            if (watchId !== null) {
+              navigator.geolocation.clearWatch(watchId);
+              watchId = null;
+            }
+            window.clearTimeout(timeout);
+          };
+
+          const finish = (callback, value) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            callback(value);
+          };
+
+          const timeout = window.setTimeout(() => {
+            if (bestLocation) {
+              finish(resolve, bestLocation);
+              return;
+            }
+            finish(reject, lastError || Object.assign(new Error("Browser GPS watch timed out."), {
+              code: 3
+            }));
+          }, browserLocationWatchTimeoutMs);
+
+          try {
+            watchId = navigator.geolocation.watchPosition(
+              (position) => {
+                const location = {
+                  latitude: position.coords.latitude,
+                  longitude: position.coords.longitude,
+                  accuracyMeters: position.coords.accuracy
+                };
+                if (isBetterBrowserLocation(location, bestLocation)) {
+                  bestLocation = location;
+                }
+                if (onAttempt) {
+                  onAttempt({
+                    phase: "watch",
+                    total: browserLocationAttemptCount,
+                    bestLocation,
+                    currentLocation: location
+                  });
+                }
+                if (isUsableBrowserLocation(location)) {
+                  finish(resolve, location);
+                }
+              },
+              (error) => {
+                const wrapped = new Error(error && error.message
+                  ? error.message
+                  : "Browser GPS watch was not available.");
+                wrapped.code = error && error.code;
+                lastError = wrapped;
+                if (wrapped.code === 1) {
+                  finish(reject, wrapped);
+                }
+              },
+              { enableHighAccuracy: true, maximumAge: 0, timeout: browserLocationWatchTimeoutMs }
+            );
+          } catch (error) {
+            finish(reject, error);
+          }
+        });
+      }
+
       function sleepForBrowserLocationRetry() {
         return new Promise((resolve) => window.setTimeout(resolve, browserLocationRetryDelayMs));
       }
@@ -825,6 +906,20 @@ const page = `<!doctype html>
 
           if (attempt < browserLocationAttemptCount) {
             await sleepForBrowserLocationRetry();
+          }
+        }
+
+        if (bestLocation && !isUsableBrowserLocation(bestLocation)) {
+          try {
+            const watchedLocation = await getBrowserLocationFromWatch(onAttempt, bestLocation);
+            if (isBetterBrowserLocation(watchedLocation, bestLocation)) {
+              bestLocation = watchedLocation;
+            }
+            if (isUsableBrowserLocation(bestLocation)) {
+              return bestLocation;
+            }
+          } catch (error) {
+            lastError = error;
           }
         }
 
@@ -1026,7 +1121,7 @@ const page = `<!doctype html>
 
         locationDiagnostics.textContent = [
           "Diagnóstico GPS:",
-          "Versión visible: gps-retry-persistent-cache",
+          "Versión visible: gps-watch-persistent-cache",
           "HTTPS/contexto seguro: " + (secureContext ? "sí" : "no"),
           "API GPS del navegador: " + (hasGeoApi ? "sí" : "no"),
           "API de permisos: " + (hasPermissionsApi ? "sí" : "no"),
@@ -1056,10 +1151,19 @@ const page = `<!doctype html>
       async function requestBrowserLocationForSearch() {
         try {
           setLocationStatus(getLocationPermissionPromptMessage());
-          const location = await getBrowserLocation(({ attempt, total, bestLocation }) => {
+          const location = await getBrowserLocation(({ attempt, total, bestLocation, phase, currentLocation }) => {
             const bestText = bestLocation
               ? " Mejor lectura hasta ahora: " + Math.round(bestLocation.accuracyMeters || 0) + " m."
               : "";
+            if (phase === "watch") {
+              const currentText = currentLocation
+                ? " Última lectura: " + Math.round(currentLocation.accuracyMeters || 0) + " m."
+                : "";
+              setLocationStatus(
+                "Esperando una lectura GPS fina de Chrome..." + bestText + currentText
+              );
+              return;
+            }
             setLocationStatus(
               "Buscando GPS preciso... intento " + attempt + " de " + total + "." + bestText
             );
@@ -1146,7 +1250,7 @@ const page = `<!doctype html>
         if (error && error.code === "GEOLOCATION_TOO_IMPRECISE") {
           const accuracy = Number(error.accuracyMeters);
           const accuracyText = Number.isFinite(accuracy) ? Math.round(accuracy) + " m" : "demasiado baja";
-          return "He intentado obtener un GPS preciso varias veces, pero el navegador solo ha dado una ubicación demasiado aproximada (" + accuracyText + "). No la uso para buscar sitios cercanos porque puede mandarte a otro barrio o al centro de la ciudad. Escribe una dirección exacta o coordenadas.";
+          return "He intentado obtener un GPS preciso varias veces y he esperado una lectura fina de Chrome, pero el navegador solo ha dado una ubicación demasiado aproximada (" + accuracyText + "). No la uso para buscar sitios cercanos porque puede mandarte a otro barrio o al centro de la ciudad. Escribe una dirección exacta o coordenadas.";
         }
 
         if (error && error.code === 1) {
