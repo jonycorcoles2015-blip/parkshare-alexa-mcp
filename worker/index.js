@@ -2219,7 +2219,7 @@ const page = `<!doctype html>
       appendScenarioButton(actions, "alerts");
       appendScenarioGroup(
         "Crear aviso",
-        "control, accidente, retencion u obstaculo",
+        "control, accidente, retención u obstáculo",
         ["reportControl", "reportAccident", "reportTraffic", "reportHazard"]
       );
       appendScenarioButton(actions, "release");
