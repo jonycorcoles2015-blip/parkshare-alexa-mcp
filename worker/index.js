@@ -86,8 +86,9 @@ const fallbackLocation = {
 };
 
 const supermarketSearchRadiiMeters = [750, 1500, 2500, 5000, 15000, 50000, 100000];
-const supermarketCandidateLimit = 40;
+const supermarketCandidateLimit = 80;
 const routedCandidateLimit = 6;
+const maxUsableBrowserAccuracyMeters = 250;
 const geocodingTimeoutMs = 4500;
 const nominatimSearchTimeoutMs = 3500;
 const overpassTimeoutMs = 12000;
@@ -620,7 +621,7 @@ const page = `<!doctype html>
           <h2>Start location</h2>
           <div class="location-gate" id="locationGate">
             <strong>GPS del navegador</strong>
-            <p>ParkShare pide la ubicación automáticamente al entrar. Si el permiso ya está concedido pero aparece POSITION_UNAVAILABLE, este navegador no está entregando coordenadas GPS; prueba Chrome/Safari o usa dirección/coordenadas.</p>
+            <p>ParkShare pide la ubicación automáticamente al entrar. Si el navegador entrega una posición demasiado aproximada, no se usará para resultados cercanos; escribe dirección exacta o coordenadas.</p>
             <button class="secondary-button" id="startLocationPermission" type="button">Reintentar GPS del navegador</button>
           </div>
           <label for="manualLatitude">Exact coordinates</label>
@@ -697,6 +698,7 @@ const page = `<!doctype html>
       const steps = document.querySelector("#steps");
       const results = document.querySelector("#results");
       const rawResponse = document.querySelector("#rawResponse");
+      const maxUsableBrowserAccuracyMeters = ${maxUsableBrowserAccuracyMeters};
       let map;
       let routeLayer;
       let driverMarker;
@@ -786,10 +788,27 @@ const page = `<!doctype html>
           if (!parsed || typeof parsed.latitude !== "number" || typeof parsed.longitude !== "number") {
             return null;
           }
+          if (!isUsableBrowserLocation(parsed)) {
+            window.sessionStorage.removeItem("parkshareDemoBrowserLocation");
+            return null;
+          }
           return parsed;
         } catch (error) {
           return null;
         }
+      }
+
+      function isUsableBrowserLocation(location) {
+        const accuracy = Number(location && location.accuracyMeters);
+        return Number.isFinite(accuracy) && accuracy > 0 && accuracy <= maxUsableBrowserAccuracyMeters;
+      }
+
+      function makeBrowserAccuracyError(location) {
+        const accuracy = Number(location && location.accuracyMeters);
+        const error = new Error("Browser location was too imprecise for nearby search.");
+        error.code = "GEOLOCATION_TOO_IMPRECISE";
+        error.accuracyMeters = Number.isFinite(accuracy) ? accuracy : null;
+        return error;
       }
 
       function saveCachedBrowserLocation(location) {
@@ -853,7 +872,7 @@ const page = `<!doctype html>
         }
 
         if (state === "granted") {
-          setLocationStatus("El permiso de ubicación está concedido. Si el último error es POSITION_UNAVAILABLE, el navegador no consigue entregar coordenadas GPS.");
+          setLocationStatus("El permiso de ubicación está concedido. ParkShare solo usará el GPS si la precisión es de " + maxUsableBrowserAccuracyMeters + " m o mejor.");
           return;
         }
 
@@ -904,7 +923,7 @@ const page = `<!doctype html>
 
         locationDiagnostics.textContent = [
           "Diagnóstico GPS:",
-          "Versión visible: gps-auto-request+diagnostics",
+          "Versión visible: gps-quality-gated",
           "HTTPS/contexto seguro: " + (secureContext ? "sí" : "no"),
           "API GPS del navegador: " + (hasGeoApi ? "sí" : "no"),
           "API de permisos: " + (hasPermissionsApi ? "sí" : "no"),
@@ -920,6 +939,10 @@ const page = `<!doctype html>
         if (error.code === 2) return "2 POSITION_UNAVAILABLE";
         if (error.code === 3) return "3 TIMEOUT";
         if (error.code === "GEOLOCATION_UNSUPPORTED") return "GEOLOCATION_UNSUPPORTED";
+        if (error.code === "GEOLOCATION_TOO_IMPRECISE") {
+          const accuracy = Number(error.accuracyMeters);
+          return "GEOLOCATION_TOO_IMPRECISE" + (Number.isFinite(accuracy) ? " " + Math.round(accuracy) + " m" : "");
+        }
         return String(error.code || error.name || error.message || "desconocido");
       }
 
@@ -931,6 +954,9 @@ const page = `<!doctype html>
         try {
           setLocationStatus(getLocationPermissionPromptMessage());
           const location = await getBrowserLocation();
+          if (!isUsableBrowserLocation(location)) {
+            throw makeBrowserAccuracyError(location);
+          }
           lastLocationError = null;
           saveCachedBrowserLocation(location);
           renderLocationDiagnostics();
@@ -941,7 +967,7 @@ const page = `<!doctype html>
           );
           return { location, fromCache: false };
         } catch (error) {
-          if (cachedBrowserLocation) {
+          if (cachedBrowserLocation && error.code !== "GEOLOCATION_TOO_IMPRECISE") {
             setLocationStatus("Using the GPS position already allowed in this session.");
             return { location: cachedBrowserLocation, fromCache: true };
           }
@@ -1003,6 +1029,12 @@ const page = `<!doctype html>
 
         if (error && error.code === "GEOLOCATION_UNSUPPORTED") {
           return "Este navegador no puede abrir el aviso de permiso de ubicación. Abre la demo en Chrome/Safari o escribe dirección exacta/coordenadas.";
+        }
+
+        if (error && error.code === "GEOLOCATION_TOO_IMPRECISE") {
+          const accuracy = Number(error.accuracyMeters);
+          const accuracyText = Number.isFinite(accuracy) ? Math.round(accuracy) + " m" : "demasiado baja";
+          return "El navegador ha dado una ubicación demasiado aproximada (" + accuracyText + "). No la uso para buscar sitios cercanos porque puede mandarte a otro barrio o al centro de la ciudad. Escribe una dirección exacta o coordenadas.";
         }
 
         if (error && error.code === 1) {
@@ -1185,8 +1217,8 @@ const page = `<!doctype html>
       }
 
       function describeLocationForSpeech(source, label) {
-        if (source === "browser_geolocation") return "your precise browser location";
-        if (source === "cached_browser_geolocation") return "your saved browser location from this session";
+        if (source === "browser_geolocation") return "your browser GPS location";
+        if (source === "cached_browser_geolocation") return "your saved browser GPS location from this session";
         if (source === "typed_coordinates") return "the exact coordinates you entered";
         if (source === "manual_geocoded_location" || source === "manual_location_text") {
           return "the typed address " + label;
@@ -1367,7 +1399,7 @@ const page = `<!doctype html>
               args.locationText = manualText;
               args.locationSource = "manual_location_text";
               args.locationLabel = manualText;
-              if (cachedBrowserLocation && !textHasLocalityContext(manualText)) {
+              if (cachedBrowserLocation && isUsableBrowserLocation(cachedBrowserLocation) && !textHasLocalityContext(manualText)) {
                 args.geocodeBiasLatitude = cachedBrowserLocation.latitude;
                 args.geocodeBiasLongitude = cachedBrowserLocation.longitude;
                 args.geocodeBiasRadiusMeters = 50000;
@@ -1392,7 +1424,7 @@ const page = `<!doctype html>
                   : "browser_geolocation";
                 args.locationLabel = locationResult.fromCache
                   ? "your saved browser location from this session"
-                  : "your precise browser location";
+                  : "your browser GPS location";
                 assistantAnswer.textContent = getLocationProgressMessage(scenario, "browser");
                 addMessage("assistant", getLocationAcknowledgement(scenario, "browser"));
               } catch (locationError) {
@@ -1697,6 +1729,41 @@ function hasValidCoordinates(latitude, longitude) {
   return Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 }
 
+function hasImpreciseBrowserLocation(args = {}) {
+  const source = String(args.locationSource || "");
+  if (!["browser_geolocation", "cached_browser_geolocation"].includes(source)) {
+    return false;
+  }
+
+  const accuracy = Number(args.accuracyMeters);
+  return Number.isFinite(accuracy) && accuracy > maxUsableBrowserAccuracyMeters;
+}
+
+function formatAccuracyMeters(value) {
+  const accuracy = Number(value);
+  return Number.isFinite(accuracy)
+    ? `${Math.round(accuracy)} meters`
+    : "low accuracy";
+}
+
+function buildImpreciseBrowserLocationResult(args, extra = {}) {
+  const accuracyText = formatAccuracyMeters(args.accuracyMeters);
+  return {
+    spoken:
+      `The browser location is too approximate (${accuracyText}), so I will not use it for nearby results. ` +
+      "Please enter an exact address or exact latitude and longitude.",
+    data: {
+      ...extra,
+      locationSource: "browser_geolocation_too_imprecise",
+      locationLabel: args.locationLabel,
+      accuracyMeters: args.accuracyMeters || null,
+      maxUsableAccuracyMeters: maxUsableBrowserAccuracyMeters,
+      needsLocation: true,
+      results: []
+    }
+  };
+}
+
 function getGeocodeBiasFromArgs(args) {
   if (!hasValidCoordinates(args.geocodeBiasLatitude, args.geocodeBiasLongitude)) {
     return null;
@@ -1722,11 +1789,11 @@ function formatAvailabilityForSpeech(place) {
 
 function describeStartLocation(source, label) {
   if (source === "browser_geolocation") {
-    return "your precise browser location";
+    return "your browser GPS location";
   }
 
   if (source === "cached_browser_geolocation") {
-    return "your saved browser location from this session";
+    return "your saved browser GPS location from this session";
   }
 
   if (source === "typed_coordinates") {
@@ -2401,7 +2468,7 @@ async function fetchNominatimPlaces(origin, category, maxResults) {
       const params = new URLSearchParams({
         format: "jsonv2",
         extratags: "1",
-        limit: String(Math.min(Math.max(maxResults * 4, 12), 25)),
+        limit: String(Math.min(Math.max(maxResults * 4, 24), 50)),
         q: term,
         bounded: "1",
         viewbox: viewboxForRadius(origin, radius)
@@ -2472,7 +2539,7 @@ function buildOverpassCategoryQuery(category, radius, origin, rawResultLimit) {
 
 async function fetchOpenStreetMapPlaces(origin, category, maxResults) {
   const startedAt = Date.now();
-  const rawResultLimit = Math.min(Math.max(maxResults * 4, 12), 25);
+  const rawResultLimit = Math.min(Math.max(maxResults * 6, 40), 100);
 
   for (const radius of supermarketSearchRadiiMeters) {
     const query = buildOverpassCategoryQuery(category, radius, origin, rawResultLimit);
@@ -2739,6 +2806,13 @@ async function findNearbyPlace(args) {
   const liveCategory = getLivePlaceCategory(query);
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
 
+  if (liveCategory && hasCoordinates && hasImpreciseBrowserLocation(args)) {
+    return buildImpreciseBrowserLocationResult(args, {
+      query: args.query,
+      category: liveCategory.id
+    });
+  }
+
   if (liveCategory && hasCoordinates) {
     const origin = {
       latitude: Number(args.latitude),
@@ -2840,10 +2914,18 @@ function findParkingNearDestination(args) {
   const requireConfirmation = args.requirePreviousSpotConfirmation !== false;
   const best = demoParking[0];
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+  const impreciseBrowserLocation = hasCoordinates && hasImpreciseBrowserLocation(args);
   const needsCurrentLocation =
     String(args.destination || "").toLowerCase().includes("current location") ||
     String(args.destination || "").toLowerCase().includes("my location");
-  if (needsCurrentLocation && !hasCoordinates) {
+  if (needsCurrentLocation && (!hasCoordinates || impreciseBrowserLocation)) {
+    if (impreciseBrowserLocation) {
+      return buildImpreciseBrowserLocationResult(args, {
+        destination: args.destination,
+        parkingLeads: []
+      });
+    }
+
     const fallbackAttempted = args.allowApproximateNetworkLocation === true;
     const typedAddressFailed = args.locationSource === "manual_location_failed";
     return {
@@ -2895,11 +2977,20 @@ function findParkingNearDestination(args) {
 function getRoadAlerts(args) {
   const primary = demoAlerts[0];
   const hasCoordinates = hasValidCoordinates(args.latitude, args.longitude);
+  const impreciseBrowserLocation = hasCoordinates && hasImpreciseBrowserLocation(args);
   const needsCurrentLocation =
     String(args.origin || "").toLowerCase().includes("current_location") ||
     String(args.origin || "").toLowerCase().includes("current location") ||
     String(args.origin || "").toLowerCase().includes("my location");
-  if (needsCurrentLocation && !hasCoordinates) {
+  if (needsCurrentLocation && (!hasCoordinates || impreciseBrowserLocation)) {
+    if (impreciseBrowserLocation) {
+      return buildImpreciseBrowserLocationResult(args, {
+        origin: args.origin || "current_location",
+        destination: args.destination,
+        alerts: []
+      });
+    }
+
     const fallbackAttempted = args.allowApproximateNetworkLocation === true;
     const typedAddressFailed = args.locationSource === "manual_location_failed";
     return {
