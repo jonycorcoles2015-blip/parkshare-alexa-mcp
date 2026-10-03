@@ -1281,21 +1281,30 @@ const page = `<!doctype html>
         return label || "la ubicacion seleccionada";
       }
 
-      function describeStructuredCategory(structured) {
-        if (!structured || !structured.category) return "";
-        if (structured.category === "gas_station") return "la gasolinera mas cercana, ";
-        if (structured.category === "hotel") return "el hotel o motel mas cercano, ";
-        if (structured.category === "pharmacy") return "la farmacia mas cercana, ";
-        if (structured.category === "food") return "el sitio para comer mas cercano, ";
-        if (structured.category === "supermarket") return "el supermercado mas cercano, ";
-        return "";
+      function describeStructuredCategory(structured, destination) {
+        if (!structured || !structured.category) return "la opcion cercana encontrada, ";
+        const categoryPlural = {
+          gas_station: "gasolineras",
+          hotel: "hoteles o moteles",
+          pharmacy: "farmacias",
+          food: "sitios para comer",
+          supermarket: "supermercados"
+        }[structured.category] || "sitios cercanos";
+
+        if (destination && destination.availability === "open") {
+          return "la opcion abierta mas cercana para " + categoryPlural + ", ";
+        }
+        if (destination && destination.availability === "closed") {
+          return "la opcion mas cercana por distancia para " + categoryPlural + ", ";
+        }
+        return "la opcion mas cercana encontrada para " + categoryPlural + ", ";
       }
 
       function describeAvailabilityForSpeech(destination) {
         if (!destination) return "";
         if (destination.availability === "open") return " Parece abierto ahora.";
         if (destination.availability === "closed") return " Puede estar cerrado ahora, revisalo antes de ir.";
-        return "";
+        return " No tengo el horario confirmado.";
       }
 
       function textHasLocalityContext(text) {
@@ -1379,7 +1388,7 @@ const page = `<!doctype html>
           );
           data.content[0].text =
             "Usando " + label + ", encontre " + destination.name + ", " +
-            describeStructuredCategory(structured) + "a unos " +
+            describeStructuredCategory(structured, destination) + "a unos " +
             destination.distanceKm + " kilometros. El trayecto dura alrededor de " +
             formatMinutes(route.durationMinutes) + "." + describeAvailabilityForSpeech(destination);
         }
