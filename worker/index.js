@@ -294,86 +294,86 @@ const toolDefinitions = [
 
 const pageScenarios = {
   supermarket: {
-    label: "Find supermarket near me",
-    driver: "Alexa, ask ParkShare to find the nearest supermarket from my location.",
+    label: "Supermercado cercano",
+    driver: "Alexa, pide a ParkShare que encuentre el supermercado mas cercano a mi ubicacion.",
     tool: "find_nearby_place",
     args: { query: "supermarket", maxResults: 3 },
     needsLocation: true,
-    context: "Live supermarket search from the active location",
+    context: "Busqueda real de supermercados desde la ubicacion activa",
     steps: [
-      "Use browser, approximate or typed driver location",
-      "Search OpenStreetMap supermarkets around that point",
-      "Rank results by closest mapped place",
-      "Draw a route to the closest supermarket when routing is available"
+      "Usar GPS del navegador, coordenadas exactas o direccion escrita",
+      "Buscar supermercados reales en OpenStreetMap alrededor de ese punto",
+      "Ordenar resultados por cercania real al punto de salida",
+      "Dibujar ruta al supermercado mas cercano cuando haya ruta disponible"
     ]
   },
   fuel: {
-    label: "Find gas station near me",
-    driver: "Alexa, ask ParkShare to find the nearest gas station from my location.",
+    label: "Gasolinera cercana",
+    driver: "Alexa, pide a ParkShare que encuentre la gasolinera mas cercana a mi ubicacion.",
     tool: "find_nearby_place",
     args: { query: "gas station", maxResults: 3 },
     needsLocation: true,
-    context: "Fuel stop search from the active location",
+    context: "Busqueda real de gasolineras desde la ubicacion activa",
     steps: [
-      "Use browser, exact or typed driver location",
-      "Search OpenStreetMap fuel stops around that point",
-      "Rank gas stations by closest mapped place",
-      "Draw a route to the closest fuel stop when routing is available"
+      "Usar GPS del navegador, coordenadas exactas o direccion escrita",
+      "Buscar gasolineras reales en OpenStreetMap alrededor de ese punto",
+      "Ordenar gasolineras por cercania real al punto de salida",
+      "Dibujar ruta a la gasolinera mas cercana cuando haya ruta disponible"
     ]
   },
   hotel: {
-    label: "Find hotel/motel near me",
-    driver: "Alexa, ask ParkShare to find the nearest hotel or motel from my location.",
+    label: "Hotel o motel cercano",
+    driver: "Alexa, pide a ParkShare que encuentre el hotel o motel mas cercano a mi ubicacion.",
     tool: "find_nearby_place",
     args: { query: "hotel", maxResults: 3 },
     needsLocation: true,
-    context: "Roadside rest search from the active location",
+    context: "Busqueda real de descanso en carretera desde la ubicacion activa",
     steps: [
-      "Use browser, exact or typed driver location",
-      "Search OpenStreetMap hotels and motels around that point",
-      "Rank places by closest mapped location",
-      "Draw a route to the closest stop when routing is available"
+      "Usar GPS del navegador, coordenadas exactas o direccion escrita",
+      "Buscar hoteles y moteles reales en OpenStreetMap alrededor de ese punto",
+      "Ordenar lugares por cercania real al punto de salida",
+      "Dibujar ruta al punto mas cercano cuando haya ruta disponible"
     ]
   },
   parking: {
-    label: "Find parking near me",
-    driver: "Alexa, ask ParkShare to find parking near my location.",
+    label: "Aparcamiento cercano",
+    driver: "Alexa, pide a ParkShare que busque aparcamiento cerca de mi ubicacion.",
     tool: "find_parking_near_destination",
     args: { destination: "my current location", requirePreviousSpotConfirmation: true },
     needsLocation: true,
-    context: "Parking guidance from the active location",
+    context: "Guia de aparcamiento desde la ubicacion activa",
     steps: [
-      "Use browser, approximate or typed driver location",
-      "Check active parking stock",
-      "Select closest practical parking lead",
-      "Ask whether the previous spot was left free"
+      "Usar GPS del navegador, coordenadas exactas o direccion escrita",
+      "Comprobar stock activo de aparcamiento",
+      "Elegir la pista de aparcamiento practica mas cercana",
+      "Preguntar si se ha dejado libre la plaza anterior"
     ]
   },
   alerts: {
-    label: "Road alerts",
-    driver: "Alexa, ask ParkShare if there are road alerts on my route.",
+    label: "Alertas de carretera",
+    driver: "Alexa, pregunta a ParkShare si hay alertas de carretera desde mi ubicacion.",
     tool: "get_road_alerts",
     args: { origin: "current_location", destination: "Montblanc", includeAlternativeRoute: true },
     needsLocation: true,
-    context: "Community route alerts",
+    context: "Alertas comunitarias de ruta",
     steps: [
-      "Use browser, approximate or typed driver location",
-      "Check active controls, cameras and traffic reports",
-      "Compare primary and alternate route",
-      "Prepare short driving-safe recommendation"
+      "Usar GPS del navegador, coordenadas exactas o direccion escrita",
+      "Comprobar controles, radares y avisos de trafico activos",
+      "Comparar ruta principal y alternativa",
+      "Preparar recomendacion breve y segura para conducir"
     ]
   },
   release: {
-    label: "Release spot",
-    driver: "Alexa, tell ParkShare I left my parking spot free.",
+    label: "Liberar plaza",
+    driver: "Alexa, dile a ParkShare que he dejado mi plaza libre.",
     tool: "release_parking_spot",
     args: { confirmation: "driver_confirmed_free" },
-    context: "Collaborative parking update",
+    context: "Actualizacion colaborativa de aparcamiento",
     steps: [
-      "Confirm driver intent",
-      "Release previous parking coordinates",
-      "Publish temporary free-spot signal",
-      "Start expiry and confidence rules"
+      "Confirmar la intencion del conductor",
+      "Liberar las coordenadas de aparcamiento anteriores",
+      "Publicar senal temporal de plaza libre",
+      "Activar caducidad y reglas de confianza"
     ]
   }
 };
@@ -604,79 +604,79 @@ const page = `<!doctype html>
           <div class="brand-mark">P</div>
           <h1>ParkShare Alexa+ MCP</h1>
           <p>
-            Interactive demo for the ParkShare Alexa+ mobility copilot. Nearby-place search uses the
-            visitor's browser location when they allow it, searches live OpenStreetMap data, and draws
-            the route on a real map. MCP clients use <code>POST /mcp</code>; this browser demo calls
-            <code>POST /demo</code>, backed by the same ParkShare tool functions.
+            Demo interactiva del copiloto de movilidad ParkShare para Alexa+. La busqueda de sitios cercanos
+            usa el GPS real del navegador cuando es suficientemente preciso, consulta datos vivos de
+            OpenStreetMap y dibuja la ruta en un mapa real. Los clientes MCP usan <code>POST /mcp</code>;
+            esta demo web llama a <code>POST /demo</code> con las mismas funciones de ParkShare.
           </p>
-          <div class="status">MCP endpoint live · GPS diagnostics</div>
+          <div class="status">MCP activo · Diagnostico GPS</div>
         </section>
 
         <section>
-          <h2>Demo scenarios</h2>
+          <h2>Escenarios demo</h2>
           <div class="actions" id="actions"></div>
         </section>
 
         <section class="fallback-location">
-          <h2>Start location</h2>
+          <h2>Ubicacion de inicio</h2>
           <div class="location-gate" id="locationGate">
             <strong>GPS del navegador</strong>
             <p>ParkShare pide la ubicación automáticamente al entrar. Si el navegador entrega una posición demasiado aproximada, no se usará para resultados cercanos; escribe dirección exacta o coordenadas.</p>
             <button class="secondary-button" id="startLocationPermission" type="button">Reintentar GPS del navegador</button>
           </div>
-          <label for="manualLatitude">Exact coordinates</label>
+          <label for="manualLatitude">Coordenadas exactas</label>
           <div class="coordinate-grid">
-            <input id="manualLatitude" type="text" inputmode="decimal" placeholder="Latitude">
-            <input id="manualLongitude" type="text" inputmode="decimal" placeholder="Longitude">
+            <input id="manualLatitude" type="text" inputmode="decimal" placeholder="Latitud">
+            <input id="manualLongitude" type="text" inputmode="decimal" placeholder="Longitud">
           </div>
-          <label for="manualLocation">Exact address or city</label>
-          <input id="manualLocation" type="text" placeholder="Street and number, city, country" autocomplete="street-address">
+          <label for="manualLocation">Direccion exacta o ciudad</label>
+          <input id="manualLocation" type="text" placeholder="Calle y numero, ciudad, pais" autocomplete="street-address">
           <div class="location-controls">
-            <div class="location-status" id="locationStatus">Press a "near me" scenario or this button to request browser GPS. If this embedded browser blocks the permission popup, enter an exact address or coordinates.</div>
+            <div class="location-status" id="locationStatus">Pulsa un escenario cercano o reintenta GPS. Si el navegador no entrega una posicion precisa, escribe una direccion exacta o coordenadas.</div>
           </div>
           <div class="location-diagnostics" id="locationDiagnostics">Diagnóstico GPS: comprobando navegador...</div>
-          <small>Leave these empty to request browser GPS for this search. IP/network location is not used for nearest-place results because it can be kilometers away. If GPS is denied, enter exact coordinates or an address with enough city and country context.</small>
+          <small>Deja estos campos vacios para pedir GPS al navegador. No se usa ubicacion por IP/red para resultados cercanos porque puede fallar por kilometros. Si el GPS se deniega o es demasiado impreciso, introduce coordenadas exactas o una direccion completa.</small>
         </section>
 
         <section>
-          <h2>Conversation</h2>
+          <h2>Conversacion</h2>
           <div class="conversation" id="conversation" aria-live="polite"></div>
         </section>
       </div>
 
       <div class="right">
         <section class="answer">
-          <h2>Assistant answer</h2>
-          <p id="assistantAnswer">Choose a scenario to call the ParkShare MCP server.</p>
+          <h2>Respuesta del asistente</h2>
+          <p id="assistantAnswer">Elige un escenario para probar ParkShare.</p>
         </section>
 
-        <section class="map" aria-label="Route preview">
+        <section class="map" aria-label="Vista previa de ruta">
           <div id="map">
-            <div class="map-placeholder">Choose a nearby-place scenario and allow location to draw a live route.</div>
+            <div class="map-placeholder">Elige un escenario cercano y permite ubicacion precisa para dibujar una ruta real.</div>
           </div>
         </section>
 
         <section>
-          <h2 id="contextTitle">Current mobility context</h2>
+          <h2 id="contextTitle">Contexto de movilidad actual</h2>
           <div class="meta-grid">
-            <div><strong id="toolCount">${toolDefinitions.length}</strong><span>ParkShare tools</span></div>
-            <div><strong id="endpointLabel">/mcp</strong><span>HTTPS endpoint</span></div>
-            <div><strong id="statusLabel">Ready</strong><span>Alexa+ connection</span></div>
+            <div><strong id="toolCount">${toolDefinitions.length}</strong><span>herramientas ParkShare</span></div>
+            <div><strong id="endpointLabel">/mcp</strong><span>endpoint HTTPS</span></div>
+            <div><strong id="statusLabel">Listo</strong><span>conexion Alexa+</span></div>
           </div>
         </section>
 
         <section>
-          <h2>Action log</h2>
+          <h2>Pasos de accion</h2>
           <div class="steps" id="steps"></div>
         </section>
 
         <section>
-          <h2>Structured result</h2>
+          <h2>Resultado estructurado</h2>
           <div class="results" id="results"></div>
         </section>
 
         <section>
-          <h2>MCP response</h2>
+          <h2>Respuesta MCP</h2>
           <pre id="rawResponse">{}</pre>
         </section>
       </div>
@@ -732,7 +732,7 @@ const page = `<!doctype html>
         if (!entries.length) {
           const node = document.createElement("div");
           node.className = "result";
-          node.textContent = "No structured result yet.";
+          node.textContent = "Aun no hay resultado estructurado.";
           results.appendChild(node);
           return;
         }
@@ -961,14 +961,14 @@ const page = `<!doctype html>
           saveCachedBrowserLocation(location);
           renderLocationDiagnostics();
           setLocationStatus(
-            "GPS ready for this session. Accuracy: about " +
+            "GPS listo para esta sesion. Precision aproximada: " +
             Math.round(location.accuracyMeters || 0) +
-            " meters."
+            " metros."
           );
           return { location, fromCache: false };
         } catch (error) {
           if (cachedBrowserLocation && error.code !== "GEOLOCATION_TOO_IMPRECISE") {
-            setLocationStatus("Using the GPS position already allowed in this session.");
+            setLocationStatus("Usando la posicion GPS ya permitida en esta sesion.");
             return { location: cachedBrowserLocation, fromCache: true };
           }
           lastLocationError = error;
@@ -1090,7 +1090,7 @@ const page = `<!doctype html>
 
           if (!response.ok) {
             const message = await response.text().catch(() => "");
-            throw new Error(message || "ParkShare demo request failed.");
+            throw new Error(message || "La demo de ParkShare no pudo responder.");
           }
 
           return response.json();
@@ -1119,7 +1119,7 @@ const page = `<!doctype html>
       }
 
       function formatMinutes(minutes) {
-        return Number(minutes) === 1 ? "1 minute" : minutes + " minutes";
+        return Number(minutes) === 1 ? "1 minuto" : minutes + " minutos";
       }
 
       function parseTypedCoordinates() {
@@ -1142,7 +1142,7 @@ const page = `<!doctype html>
           longitude < -180 ||
           longitude > 180
         ) {
-          throw new Error("Enter both latitude and longitude with valid numeric values.");
+          throw new Error("Introduce latitud y longitud con valores numericos validos.");
         }
 
         return { latitude, longitude };
@@ -1151,98 +1151,98 @@ const page = `<!doctype html>
       function getLocationDriverText(scenario, source) {
         if (scenario.tool === "find_parking_near_destination") {
           if (source === "coordinates") {
-            return "Alexa, ask ParkShare to find parking near these exact coordinates.";
+            return "Alexa, pide a ParkShare que busque aparcamiento cerca de estas coordenadas exactas.";
           }
           if (source === "typed") {
-            return "Alexa, ask ParkShare to find parking near this typed city or address.";
+            return "Alexa, pide a ParkShare que busque aparcamiento cerca de esta direccion escrita.";
           }
-          return "Alexa, ask ParkShare to find parking near my location.";
+          return "Alexa, pide a ParkShare que busque aparcamiento cerca de mi ubicacion.";
         }
 
         if (scenario.tool === "get_road_alerts") {
           if (source === "coordinates") {
-            return "Alexa, ask ParkShare if there are road alerts from these exact coordinates.";
+            return "Alexa, pregunta a ParkShare si hay alertas de carretera desde estas coordenadas exactas.";
           }
           if (source === "typed") {
-            return "Alexa, ask ParkShare if there are road alerts from this typed city or address.";
+            return "Alexa, pregunta a ParkShare si hay alertas de carretera desde esta direccion escrita.";
           }
-          return "Alexa, ask ParkShare if there are road alerts from my location.";
+          return "Alexa, pregunta a ParkShare si hay alertas de carretera desde mi ubicacion.";
         }
 
         const target = getScenarioTarget(scenario, "singular");
         if (source === "coordinates") {
-          return "Alexa, ask ParkShare to find " + target + " from these exact coordinates.";
+          return "Alexa, pide a ParkShare que encuentre " + target + " desde estas coordenadas exactas.";
         }
         if (source === "typed") {
-          return "Alexa, ask ParkShare to find " + target + " from this typed city or address.";
+          return "Alexa, pide a ParkShare que encuentre " + target + " desde esta direccion escrita.";
         }
-        return "Alexa, ask ParkShare to find " + target + " from my location.";
+        return "Alexa, pide a ParkShare que encuentre " + target + " desde mi ubicacion.";
       }
 
       function getScenarioTarget(scenario, form) {
         const query = String((scenario.args && scenario.args.query) || "").toLowerCase();
-        if (scenario.tool === "find_parking_near_destination") return "parking";
-        if (scenario.tool === "get_road_alerts") return "road alerts";
+        if (scenario.tool === "find_parking_near_destination") return "aparcamiento";
+        if (scenario.tool === "get_road_alerts") return "alertas de carretera";
         if (query.includes("gas station") || query.includes("fuel")) {
-          return form === "singular" ? "the nearest gas station" : "gas stations";
+          return form === "singular" ? "la gasolinera mas cercana" : "gasolineras";
         }
         if (query.includes("hotel") || query.includes("motel")) {
-          return form === "singular" ? "the nearest hotel or motel" : "hotels and motels";
+          return form === "singular" ? "el hotel o motel mas cercano" : "hoteles y moteles";
         }
-        return form === "singular" ? "the nearest supermarket" : "supermarkets";
+        return form === "singular" ? "el supermercado mas cercano" : "supermercados";
       }
 
       function getLocationProgressMessage(scenario, source) {
         const target = getScenarioTarget(scenario, "plural");
 
         if (source === "coordinates") {
-          return "Searching " + target + " from the exact coordinates you entered...";
+          return "Buscando " + target + " desde las coordenadas exactas introducidas...";
         }
         if (source === "typed") {
-          return "Searching " + target + " from the typed address...";
+          return "Buscando " + target + " desde la direccion escrita...";
         }
-        return "Searching " + target + " near this location...";
+        return "Buscando " + target + " cerca de esta ubicacion...";
       }
 
       function getLocationAcknowledgement(scenario, source) {
         const target = getScenarioTarget(scenario, "singular");
 
         if (source === "coordinates") {
-          return "I will search " + target + " from the exact coordinates you entered.";
+          return "Buscare " + target + " desde las coordenadas exactas introducidas.";
         }
         if (source === "typed") {
-          return "I will search " + target + " from the address or city you typed.";
+          return "Buscare " + target + " desde la direccion o ciudad escrita.";
         }
-        return "Location allowed. Searching " + target + " now.";
+        return "Ubicacion permitida. Buscando " + target + " ahora.";
       }
 
       function describeLocationForSpeech(source, label) {
-        if (source === "browser_geolocation") return "your browser GPS location";
-        if (source === "cached_browser_geolocation") return "your saved browser GPS location from this session";
-        if (source === "typed_coordinates") return "the exact coordinates you entered";
+        if (source === "browser_geolocation") return "tu ubicacion GPS del navegador";
+        if (source === "cached_browser_geolocation") return "tu ubicacion GPS guardada en esta sesion";
+        if (source === "typed_coordinates") return "las coordenadas exactas introducidas";
         if (source === "manual_geocoded_location" || source === "manual_location_text") {
-          return "the typed address " + label;
+          return "la direccion escrita " + label;
         }
         if (source === "network_approximate_location" || source === "ip_approximate_location") {
-          return "your approximate network location";
+          return "tu ubicacion aproximada de red";
         }
-        return label || "the selected location";
+        return label || "la ubicacion seleccionada";
       }
 
       function describeStructuredCategory(structured) {
         if (!structured || !structured.category) return "";
-        if (structured.category === "gas_station") return "the nearest gas station, ";
-        if (structured.category === "hotel") return "the nearest hotel or motel, ";
-        if (structured.category === "pharmacy") return "the nearest pharmacy, ";
-        if (structured.category === "food") return "the nearest place to eat, ";
-        if (structured.category === "supermarket") return "the nearest supermarket, ";
+        if (structured.category === "gas_station") return "la gasolinera mas cercana, ";
+        if (structured.category === "hotel") return "el hotel o motel mas cercano, ";
+        if (structured.category === "pharmacy") return "la farmacia mas cercana, ";
+        if (structured.category === "food") return "el sitio para comer mas cercano, ";
+        if (structured.category === "supermarket") return "el supermercado mas cercano, ";
         return "";
       }
 
       function describeAvailabilityForSpeech(destination) {
         if (!destination) return "";
-        if (destination.availability === "open") return " It appears open now.";
-        if (destination.availability === "closed") return " It may be closed now, so check before going.";
+        if (destination.availability === "open") return " Parece abierto ahora.";
+        if (destination.availability === "closed") return " Puede estar cerrado ahora, revisalo antes de ir.";
         return "";
       }
 
@@ -1323,12 +1323,12 @@ const page = `<!doctype html>
         if (data.content && data.content[0]) {
           const label = describeLocationForSpeech(
             structured.locationSource,
-            structured.locationLabel || "your location"
+            structured.locationLabel || "tu ubicacion"
           );
           data.content[0].text =
-            "Using " + label + ", I found " + destination.name + ", " +
-            describeStructuredCategory(structured) + "about " +
-            destination.distanceKm + " kilometers away. The drive is around " +
+            "Usando " + label + ", encontre " + destination.name + ", " +
+            describeStructuredCategory(structured) + "a unos " +
+            destination.distanceKm + " kilometros. El trayecto dura alrededor de " +
             formatMinutes(route.durationMinutes) + "." + describeAvailabilityForSpeech(destination);
         }
       }
@@ -1343,10 +1343,10 @@ const page = `<!doctype html>
         if (driverMarker) driverMarker.remove();
         if (placeMarker) placeMarker.remove();
 
-        driverMarker = L.marker([origin.latitude, origin.longitude]).addTo(map).bindPopup("Your location");
+        driverMarker = L.marker([origin.latitude, origin.longitude]).addTo(map).bindPopup("Tu ubicacion");
         placeMarker = L.marker([destination.latitude, destination.longitude])
           .addTo(map)
-          .bindPopup(destination.name || "Supermarket");
+          .bindPopup(destination.name || "Destino");
 
         if (!data.route || !Array.isArray(data.route.coordinates) || !data.route.coordinates.length) {
           const bounds = L.latLngBounds([
@@ -1447,7 +1447,7 @@ const page = `<!doctype html>
           await addBrowserRouteIfNeeded(data);
           const answer = data.content && data.content[0]
             ? data.content[0].text
-            : "The MCP server answered, but no speech text was returned.";
+            : "El servidor MCP respondio, pero no devolvio texto hablado.";
 
           assistantAnswer.textContent = answer;
           addMessage("assistant", answer);
@@ -1457,8 +1457,8 @@ const page = `<!doctype html>
         } catch (error) {
           assistantAnswer.textContent =
             error && error.name === "AbortError"
-              ? "The live lookup took too long. Please try again or type a more specific city or address."
-              : "The browser could not complete this ParkShare demo request.";
+              ? "La busqueda en directo ha tardado demasiado. Intentalo de nuevo o escribe una ciudad o direccion mas especifica."
+              : "El navegador no pudo completar esta peticion de demo de ParkShare.";
           addMessage("assistant", assistantAnswer.textContent);
           rawResponse.textContent = String(error && error.message ? error.message : error);
         } finally {
@@ -1476,7 +1476,7 @@ const page = `<!doctype html>
 
       startLocationPermission.addEventListener("click", requestEntryLocationPermission);
 
-      renderSteps(["Choose a demo scenario", "The page will call POST /demo", "MCP clients keep using POST /mcp"]);
+      renderSteps(["Elige un escenario demo", "La pagina llamara a POST /demo", "Los clientes MCP siguen usando POST /mcp"]);
       renderStructured({});
       renderLocationDiagnostics();
       setLocationStatus("Pulsa Permitir ubicación al entrar para usar GPS real. Si este navegador no muestra el permiso nativo, escribe una dirección completa o coordenadas.");
@@ -1742,16 +1742,16 @@ function hasImpreciseBrowserLocation(args = {}) {
 function formatAccuracyMeters(value) {
   const accuracy = Number(value);
   return Number.isFinite(accuracy)
-    ? `${Math.round(accuracy)} meters`
-    : "low accuracy";
+    ? `${Math.round(accuracy)} m`
+    : "precision baja";
 }
 
 function buildImpreciseBrowserLocationResult(args, extra = {}) {
   const accuracyText = formatAccuracyMeters(args.accuracyMeters);
   return {
     spoken:
-      `The browser location is too approximate (${accuracyText}), so I will not use it for nearby results. ` +
-      "Please enter an exact address or exact latitude and longitude.",
+      `La ubicacion del navegador es demasiado aproximada (${accuracyText}), asi que no la usare para resultados cercanos. ` +
+      "Introduce una direccion exacta o latitud y longitud exactas.",
     data: {
       ...extra,
       locationSource: "browser_geolocation_too_imprecise",
@@ -1778,37 +1778,55 @@ function getGeocodeBiasFromArgs(args) {
 }
 
 function formatMinutes(minutes) {
-  return Number(minutes) === 1 ? "1 minute" : `${minutes} minutes`;
+  return Number(minutes) === 1 ? "1 minuto" : `${minutes} minutos`;
 }
 
 function formatAvailabilityForSpeech(place) {
-  if (place.availability === "open") return " It appears open now.";
-  if (place.availability === "closed") return " It may be closed now, so check before going.";
+  if (place.availability === "open") return " Parece abierto ahora.";
+  if (place.availability === "closed") return " Puede estar cerrado ahora, revisalo antes de ir.";
   return "";
 }
 
 function describeStartLocation(source, label) {
   if (source === "browser_geolocation") {
-    return "your browser GPS location";
+    return "tu ubicacion GPS del navegador";
   }
 
   if (source === "cached_browser_geolocation") {
-    return "your saved browser GPS location from this session";
+    return "tu ubicacion GPS guardada en esta sesion";
   }
 
   if (source === "typed_coordinates") {
-    return "the exact coordinates you entered";
+    return "las coordenadas exactas introducidas";
   }
 
   if (source === "manual_geocoded_location" || source === "manual_location_text") {
-    return `the typed address ${label}`;
+    return `la direccion escrita ${label}`;
   }
 
   if (source === "network_approximate_location" || source === "ip_approximate_location") {
-    return "your approximate network location";
+    return "tu ubicacion aproximada de red";
   }
 
-  return label || "the selected location";
+  return label || "la ubicacion seleccionada";
+}
+
+function categorySingularEs(category) {
+  const id = typeof category === "string" ? category : category?.id;
+  if (id === "gas_station") return "gasolinera";
+  if (id === "hotel") return "hotel o motel";
+  if (id === "pharmacy") return "farmacia";
+  if (id === "food") return "sitio para comer";
+  return "supermercado";
+}
+
+function categoryPluralEs(category) {
+  const id = typeof category === "string" ? category : category?.id;
+  if (id === "gas_station") return "gasolineras";
+  if (id === "hotel") return "hoteles o moteles";
+  if (id === "pharmacy") return "farmacias";
+  if (id === "food") return "sitios para comer";
+  return "supermercados";
 }
 
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
@@ -2825,16 +2843,16 @@ async function findNearbyPlace(args) {
       const best = ranked.results[0];
       const route = ranked.route;
 
-      const label = args.locationLabel || "your location";
+      const label = args.locationLabel || "tu ubicacion";
       const source =
         args.locationSource ||
         (args.accuracyMeters ? "browser_geolocation" : "provided_coordinates");
 
       return {
         spoken:
-          `Using ${describeStartLocation(source, label)}, ` +
-          `I found ${best.name}, the nearest ${liveCategory.singular}, about ${best.distanceKm} kilometers away. ` +
-          `The drive is around ${formatMinutes(best.driveMinutes)}.${formatAvailabilityForSpeech(best)}`,
+          `Usando ${describeStartLocation(source, label)}, ` +
+          `encontre ${best.name}, el ${categorySingularEs(liveCategory)} mas cercano, a unos ${best.distanceKm} kilometros. ` +
+          `El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)}.${formatAvailabilityForSpeech(best)}`,
         data: {
           query: args.query,
           category: liveCategory.id,
@@ -2857,10 +2875,10 @@ async function findNearbyPlace(args) {
       return {
         spoken:
           typedAddressFailed
-            ? "I could not convert that typed address into trustworthy coordinates. Please enter a fuller address with city and country, or use exact latitude and longitude."
+            ? "No pude convertir esa direccion escrita en coordenadas fiables. Introduce una direccion mas completa con ciudad y pais, o usa latitud y longitud exactas."
             : fallbackAttempted
-            ? "I could not get a trustworthy start location. Please allow browser GPS, enter exact coordinates, or type an address with enough city and country context."
-            : "I do not have a usable start location yet. Please allow browser GPS, enter exact coordinates, or type an address with enough city and country context.",
+            ? "No pude obtener una ubicacion de inicio fiable. Permite GPS del navegador, introduce coordenadas exactas o escribe una direccion con suficiente contexto de ciudad y pais."
+            : "Todavia no tengo una ubicacion de inicio utilizable. Permite GPS del navegador, introduce coordenadas exactas o escribe una direccion con suficiente contexto de ciudad y pais.",
         data: {
           query: args.query,
           category: liveCategory.id,
@@ -2875,7 +2893,7 @@ async function findNearbyPlace(args) {
 
     return {
       spoken:
-        `I could not confirm live ${liveCategory.plural} near that location right now. I will not use a fake fallback because this scenario must be based on the real start point.`,
+        `No pude confirmar ${categoryPluralEs(liveCategory)} reales cerca de esa ubicacion ahora mismo. No usare una demo falsa porque este escenario debe basarse en el punto de inicio real.`,
       data: {
         query: args.query,
         category: liveCategory.id,
@@ -2899,8 +2917,8 @@ async function findNearbyPlace(args) {
 
   return {
     spoken:
-      `I could not confirm live nearby places, so I used the Montblanc fallback demo. I found ${best.name}, about ${best.distanceKm} kilometers away. ` +
-      `The drive is around ${formatMinutes(best.driveMinutes)} and I found ${best.parkingLeads} parking leads nearby.`,
+      `No pude confirmar sitios cercanos en directo, asi que use la demo de respaldo de Montblanc. Encontre ${best.name}, a unos ${best.distanceKm} kilometros. ` +
+      `El trayecto dura alrededor de ${formatMinutes(best.driveMinutes)} y encontre ${best.parkingLeads} pistas de aparcamiento cerca.`,
     data: {
       query: args.query,
       locationSource: "demo_montblanc_fallback",
@@ -2931,10 +2949,10 @@ function findParkingNearDestination(args) {
     return {
       spoken:
         typedAddressFailed
-          ? "I could not convert that typed address into coordinates, so I cannot find nearby parking from it. Please enter a fuller address with city and country, or use exact latitude and longitude."
+          ? "No pude convertir esa direccion escrita en coordenadas, asi que no puedo buscar aparcamiento desde ahi. Introduce una direccion mas completa con ciudad y pais, o usa latitud y longitud exactas."
           : fallbackAttempted
-          ? "I could not get a trustworthy start location, so I cannot find nearby parking yet. Please allow browser GPS, enter exact coordinates, or type a full address with city and country."
-          : "I need your current location before I can find nearby parking. Please allow browser GPS, enter exact coordinates, or type a full address with city and country.",
+          ? "No pude obtener una ubicacion de inicio fiable, asi que todavia no puedo buscar aparcamiento cercano. Permite GPS del navegador, introduce coordenadas exactas o escribe una direccion completa con ciudad y pais."
+          : "Necesito tu ubicacion actual antes de buscar aparcamiento cercano. Permite GPS del navegador, introduce coordenadas exactas o escribe una direccion completa con ciudad y pais.",
       data: {
         destination: args.destination,
         locationSource: typedAddressFailed ? "manual_location_failed" : "missing_location",
@@ -2947,17 +2965,17 @@ function findParkingNearDestination(args) {
   }
 
   const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "demo_destination");
-  const locationLabel = args.locationLabel || args.destination || "the selected destination";
+  const locationLabel = args.locationLabel || args.destination || "el destino seleccionado";
   const targetDescription = hasCoordinates
     ? describeStartLocation(locationSource, locationLabel)
     : args.destination;
 
   return {
     spoken:
-      `Using ${targetDescription}, the closest practical parking lead is ${best.distanceMeters} meters away. ` +
+      `Usando ${targetDescription}, la pista de aparcamiento practica mas cercana esta a ${best.distanceMeters} metros. ` +
       (requireConfirmation
-        ? "Before I start the route, did you leave your previous parking spot free?"
-        : "I can start guidance with this parking target."),
+        ? "Antes de iniciar la ruta, has dejado libre tu plaza anterior?"
+        : "Puedo iniciar la guia hacia este objetivo de aparcamiento."),
     data: {
       destination: args.destination,
       locationSource,
@@ -2996,10 +3014,10 @@ function getRoadAlerts(args) {
     return {
       spoken:
         typedAddressFailed
-          ? "I could not convert that typed address into coordinates, so I cannot check road alerts from it. Please enter a fuller address with city and country, or use exact latitude and longitude."
+          ? "No pude convertir esa direccion escrita en coordenadas, asi que no puedo comprobar alertas de carretera desde ahi. Introduce una direccion mas completa con ciudad y pais, o usa latitud y longitud exactas."
           : fallbackAttempted
-          ? "I could not get a trustworthy start location, so I cannot check road alerts from your position yet. Please allow browser GPS, enter exact coordinates, or type a full address with city and country."
-          : "I need your current location before I can check road alerts. Please allow browser GPS, enter exact coordinates, or type a full address with city and country.",
+          ? "No pude obtener una ubicacion de inicio fiable, asi que todavia no puedo comprobar alertas desde tu posicion. Permite GPS del navegador, introduce coordenadas exactas o escribe una direccion completa con ciudad y pais."
+          : "Necesito tu ubicacion actual antes de comprobar alertas de carretera. Permite GPS del navegador, introduce coordenadas exactas o escribe una direccion completa con ciudad y pais.",
       data: {
         origin: args.origin || "current_location",
         locationSource: typedAddressFailed ? "manual_location_failed" : "missing_location",
@@ -3013,16 +3031,16 @@ function getRoadAlerts(args) {
   }
 
   const locationSource = args.locationSource || (hasCoordinates ? "provided_coordinates" : "demo_origin");
-  const locationLabel = args.locationLabel || args.origin || "current location";
+  const locationLabel = args.locationLabel || args.origin || "ubicacion actual";
   const originDescription = hasCoordinates
     ? describeStartLocation(locationSource, locationLabel)
-    : args.origin || "current location";
+    : args.origin || "ubicacion actual";
 
   return {
     spoken:
-      `Using ${originDescription}, I found ${demoAlerts.length} community alerts on the route to ${args.destination}. ` +
-      `${primary.label} is ${primary.distanceKm} kilometers ahead. ` +
-      `The alternate route is about ${primary.alternateRouteDeltaMinutes} minutes slower.`,
+      `Usando ${originDescription}, encontre ${demoAlerts.length} alertas comunitarias en la ruta hacia ${args.destination}. ` +
+      `${primary.label} esta a ${primary.distanceKm} kilometros. ` +
+      `La ruta alternativa tarda unos ${primary.alternateRouteDeltaMinutes} minutos mas.`,
     data: {
       origin: args.origin || "current_location",
       locationSource,
@@ -3045,8 +3063,8 @@ function releaseParkingSpot(args) {
 
   return {
     spoken: released
-      ? "Done. I marked your previous parking spot as free for nearby ParkShare drivers."
-      : "Okay. I will not mark that parking spot as free.",
+      ? "Hecho. Marque tu plaza anterior como libre para conductores cercanos de ParkShare."
+      : "De acuerdo. No marcare esa plaza como libre.",
     data: {
       parkingSessionId: args.parkingSessionId || "demo-session",
       spotStatus: released ? "free" : "not_released",
@@ -3063,7 +3081,7 @@ function releaseParkingSpot(args) {
 function confirmPreviousSpotFree(args) {
   if (args.answer === "ask_driver") {
     return {
-      spoken: "Before I start the new route, did you leave your previous parking spot free?",
+      spoken: "Antes de iniciar la nueva ruta, has dejado libre tu plaza anterior?",
       data: {
         needsDriverAnswer: true,
         parkingSessionId: args.parkingSessionId || "demo-session"
@@ -3079,7 +3097,7 @@ function confirmPreviousSpotFree(args) {
   }
 
   return {
-    spoken: "Okay. I will keep the previous spot private and will not publish it as free.",
+    spoken: "De acuerdo. Mantendre la plaza anterior privada y no la publicare como libre.",
     data: {
       needsDriverAnswer: false,
       parkingSessionId: args.parkingSessionId || "demo-session",
